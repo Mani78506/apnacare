@@ -1,0 +1,475 @@
+import axios from "axios";
+
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:9000";
+const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL || API_BASE_URL.replace(/^http/i, "ws");
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: { "Content-Type": "application/json" },
+});
+
+api.interceptors.request.use((config) => {
+  const existingAuthorization =
+    (config.headers as Record<string, string | undefined> | undefined)?.Authorization ??
+    (config.headers as Record<string, string | undefined> | undefined)?.authorization;
+
+  if (existingAuthorization) {
+    return config;
+  }
+
+  const requestUrl = `${config.baseURL ?? ""}${config.url ?? ""}`;
+  const isAdminRequest = /\/admin(\/|$)/.test(requestUrl);
+  const isCaregiverRequest = /\/caregiver(\/|$)|\/booking\/verify-otp(\/|$)|\/booking\/latest(\/|$)/.test(requestUrl);
+  const token = isAdminRequest ? getAdminToken() : isCaregiverRequest ? getCaregiverToken() : getUserToken();
+
+  if (!token) {
+    return config;
+  }
+
+  config.headers = {
+    ...config.headers,
+    Authorization: `Bearer ${token}`,
+  };
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  (error) => Promise.reject(error)
+);
+
+const getUserToken = () => localStorage.getItem("apnacare_token");
+const getAdminToken = () => localStorage.getItem("apnacare_admin_token");
+const getCaregiverToken = () => localStorage.getItem("apnacare_caregiver_token");
+const withBearer = (token: string | null) => (token ? { Authorization: `Bearer ${token}` } : {});
+
+export interface BookingReview {
+  id: number;
+  rating: number;
+  comment: string;
+  created_at?: string | null;
+}
+
+export interface PublicCaregiverProfile {
+  id: number;
+  full_name: string | null;
+  phone?: string | null;
+  email?: string | null;
+  experience?: number | null;
+  skills: string[];
+  rating?: number | null;
+  is_verified: boolean;
+  documents: CaregiverDocumentSummary[];
+}
+
+export interface BookingSummary {
+  id: number;
+  user_id: number;
+  caregiver_id: number;
+  patient_id: number;
+  patient_name?: string | null;
+  patient_age?: number | null;
+  patient_condition?: string | null;
+  service_type?: string | null;
+  notes?: string | null;
+  duration_type?: string | null;
+  hours?: number | null;
+  days?: number | null;
+  months?: number | null;
+  status: string;
+  payment_method?: "online" | "cash_on_delivery" | null;
+  otp?: string | null;
+  otp_verified?: boolean;
+  qr_code_path?: string | null;
+  payment_status?: string | null;
+  payment_collected_method?: string | null;
+  amount?: number | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  prescription_file_name?: string | null;
+  has_prescription?: boolean;
+  caregiver?: PublicCaregiverProfile | null;
+  has_review?: boolean;
+  review?: BookingReview | null;
+}
+
+export interface CaregiverProfileSummary {
+  id: number;
+  user_id: number;
+  full_name: string | null;
+  phone: string | null;
+  email?: string | null;
+  location: string | null;
+  skills: string[];
+  experience: number | null;
+  status: "pending" | "approved" | "rejected";
+  is_available: boolean;
+  is_enabled?: boolean;
+  forced_offline?: boolean;
+  is_verified: boolean;
+  document_name?: string | null;
+  document_uploaded: boolean;
+  documents?: CaregiverDocumentSummary[];
+  rating?: number | null;
+}
+
+export interface CaregiverDocumentSummary {
+  id: number;
+  document_type: "profile" | "id" | "certificate" | string;
+  file_name: string;
+  uploaded_at?: string | null;
+}
+
+export interface AdminMetricOverview {
+  total_bookings: number;
+  active_bookings: number;
+  completed_bookings: number;
+  cancelled_bookings: number;
+  active_users: number;
+  active_caregivers: number;
+  pending_caregivers: number;
+  revenue: number;
+  platform_fees: number;
+}
+
+export interface AdminBookingPerson {
+  id: number | null;
+  name: string | null;
+  age?: number | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
+export interface AdminBookingCaregiver extends AdminBookingPerson {
+  status?: string | null;
+  is_available?: boolean | null;
+  is_enabled?: boolean | null;
+  forced_offline?: boolean | null;
+  latest_location?: { lat: number; lng: number } | null;
+}
+
+export interface AdminBookingRecord {
+  id: number;
+  status: string;
+  payment_status: string;
+  amount: number;
+  service_type?: string | null;
+  notes?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  patient: AdminBookingPerson;
+  caregiver: AdminBookingCaregiver;
+  cancel_reason?: string | null;
+  cancelled_by?: string | null;
+  admin_notes?: string | null;
+  reassigned_from_caregiver_id?: number | null;
+  live_location?: { lat: number; lng: number; timestamp?: string | null } | null;
+}
+
+export interface AdminCaregiverStats {
+  jobs_completed: number;
+  active_jobs: number;
+  average_rating: number;
+  review_count: number;
+}
+
+export interface AdminCaregiverRecord extends CaregiverProfileSummary {
+  stats?: AdminCaregiverStats;
+}
+
+export interface AdminPaymentTransaction {
+  id: number;
+  booking_id: number;
+  caregiver_id: number | null;
+  gross_amount: number;
+  caregiver_amount: number;
+  platform_fee: number;
+  status: string;
+  paid_at?: string | null;
+}
+
+export interface AdminCaregiverEarning {
+  caregiver_id: number;
+  caregiver_name: string | null;
+  email?: string | null;
+  earnings: number;
+}
+
+export interface AdminPaymentSummary {
+  total_revenue: number;
+  paid_transactions: number;
+  pending_transactions: number;
+  platform_commission: number;
+}
+
+export interface AppNotification {
+  id: number;
+  title: string;
+  message: string;
+  type: string;
+  is_read: boolean;
+  created_at?: string | null;
+}
+
+export interface PaymentOrderResponse {
+  order_id: string;
+  amount: number;
+  currency: string;
+  booking_id: number;
+  key: string;
+}
+
+export interface PaymentVerificationResponse {
+  message: string;
+  booking_id: number;
+  status: string;
+  booking_status?: string;
+  caregiver?: {
+    name?: string | null;
+    phone?: string | null;
+    experience?: number | null;
+  } | null;
+  caregiver_amount?: number;
+  platform_fee?: number;
+}
+
+export interface PaymentStatusResponse {
+  booking_id: number;
+  payment_method?: string | null;
+  payment_status: string;
+  payment_collected_method?: string | null;
+  amount?: number | null;
+  razorpay_order_id?: string | null;
+  razorpay_payment_id?: string | null;
+}
+
+export interface CaregiverHistoryItem {
+  id: number;
+  patient_name?: string | null;
+  patient_age?: number | null;
+  status: string;
+  payment_status: string;
+  service_type?: string | null;
+  duration_type?: string | null;
+  hours?: number | null;
+  days?: number | null;
+  months?: number | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  amount: number;
+  earning: number;
+}
+
+export interface CaregiverEarningsSummary {
+  today_earnings: number;
+  total_earnings: number;
+  jobs_paid: number;
+  pending_payouts: number;
+}
+
+export interface CaregiverPerformanceSummary {
+  jobs_completed: number;
+  average_rating: number;
+  review_count: number;
+  approval_status: string;
+  is_verified: boolean;
+}
+
+export interface CaregiverReviewItem {
+  id: number;
+  booking_id: number;
+  rating: number;
+  comment?: string | null;
+  created_at?: string | null;
+  patient_name?: string | null;
+}
+
+export interface AdminReviewRecord {
+  id: number;
+  booking_id: number;
+  rating: number;
+  comment: string;
+  created_at?: string | null;
+  patient_name?: string | null;
+  caregiver_name?: string | null;
+}
+
+export const authAPI = {
+  signup: (data: {
+    name: string;
+    email: string;
+    phone: string;
+    password: string;
+    role?: "user" | "caregiver";
+    location?: string;
+    skills?: string[];
+    experience?: number;
+    profile_photo?: { file_name: string; content_type?: string; file_data: string };
+    id_proof?: { file_name: string; content_type?: string; file_data: string };
+    certificate?: { file_name: string; content_type?: string; file_data: string };
+  }) => api.post("/auth/signup", data),
+  login: (payload: { email: string; password: string; expected_role?: "user" | "caregiver" | "admin" }) =>
+    api.post("/auth/login", payload),
+};
+
+export const bookingAPI = {
+  create: async (data: {
+    patient_name: string;
+    age: number;
+    date: string;
+    time: string;
+    service_type?: string;
+    notes?: string;
+    patient_condition?: string;
+    duration_type?: string;
+    hours?: number;
+    days?: number;
+    months?: number;
+    payment_method?: "online" | "cash_on_delivery";
+    prescription?: {
+      file_name: string;
+      content_type?: string;
+      file_data: string;
+    };
+  }) => {
+    const headers = withBearer(getUserToken());
+
+    try {
+      return await api.post("/booking/create", data, { headers });
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        return api.post("/booking", data, { headers });
+      }
+      throw error;
+    }
+  },
+  getLatest: () => api.get<{ booking: BookingSummary | null }>("/booking/latest", { headers: withBearer(getCaregiverToken()) }),
+  getMine: () => api.get<{ bookings: BookingSummary[] }>("/booking/mine", { headers: withBearer(getUserToken()) }),
+  verifyOtp: (payload: { booking_id: number; entered_otp: string }) =>
+    api.post<{ message: string; booking_id: number; status: string }>("/booking/verify-otp", payload, {
+      headers: withBearer(getCaregiverToken()),
+    }),
+  downloadPrescription: (bookingId: number, role: "user" | "caregiver" | "admin" = "user") => {
+    const token = role === "admin" ? getAdminToken() : role === "caregiver" ? getCaregiverToken() : getUserToken();
+    return api.get<Blob>(`/booking/${bookingId}/prescription`, {
+      headers: withBearer(token),
+      responseType: "blob",
+    });
+  },
+  submitReview: (payload: { booking_id: number; rating: number; comment: string }) =>
+    api.post<{ message: string; review: BookingReview }>("/booking/review", payload, { headers: withBearer(getUserToken()) }),
+};
+
+export const trackingAPI = {
+  getETA: (bookingId: string) => api.get(`/tracking/eta?booking_id=${bookingId}`, { headers: withBearer(getUserToken()) }),
+  getDetails: (bookingId: string) =>
+    api.get<{
+      booking: {
+        id: number;
+        status: string;
+        payment_method?: string | null;
+        payment_status?: string | null;
+        payment_collected_method?: string | null;
+        otp?: string | null;
+        otp_verified?: boolean;
+        qr_code_path?: string | null;
+        service_type?: string | null;
+        patient_name?: string | null;
+        patient_age?: number | null;
+        start_time?: string | null;
+        end_time?: string | null;
+        amount?: number | null;
+        caregiver?: PublicCaregiverProfile | null;
+      };
+      latest_location?: { lat: number; lng: number; timestamp?: string | null } | null;
+    }>(`/tracking/details?booking_id=${bookingId}`, { headers: withBearer(getUserToken()) }),
+};
+
+export const caregiverAPI = {
+  getMe: () => api.get<{ caregiver: CaregiverProfileSummary }>("/caregiver/me", { headers: withBearer(getCaregiverToken()) }),
+  updateLocation: (payload: { caregiver_id: number; booking_id: number; lat: number; lng: number }) =>
+    api.post("/caregiver/update-location", payload, { headers: withBearer(getCaregiverToken()) }),
+  updateStatus: (payload: { booking_id: number; status: string }) =>
+    api.post("/caregiver/update-status", payload, { headers: withBearer(getCaregiverToken()) }),
+  updateAvailability: (payload: { caregiver_id?: number; is_available: boolean }) =>
+    api.post<{ message: string; caregiver?: CaregiverProfileSummary }>("/caregiver/toggle-availability", payload, {
+      headers: withBearer(getCaregiverToken()),
+    }),
+  rejectBooking: (bookingId: number) =>
+    api.post(`/booking/reject/${bookingId}`, {}, { headers: withBearer(getCaregiverToken()) }),
+  getHistory: () => api.get<{ history: CaregiverHistoryItem[] }>("/caregiver/history", { headers: withBearer(getCaregiverToken()) }),
+  getEarningsSummary: () =>
+    api.get<CaregiverEarningsSummary>("/caregiver/earnings/summary", { headers: withBearer(getCaregiverToken()) }),
+  getPerformance: () =>
+    api.get<CaregiverPerformanceSummary>("/caregiver/performance", { headers: withBearer(getCaregiverToken()) }),
+  getReviews: () =>
+    api.get<{ reviews: CaregiverReviewItem[] }>("/caregiver/reviews", { headers: withBearer(getCaregiverToken()) }),
+  getNotifications: () =>
+    api.get<{ notifications: AppNotification[] }>("/caregiver/notifications", { headers: withBearer(getCaregiverToken()) }),
+  markNotificationRead: (notificationId: number) =>
+    api.post(`/caregiver/notifications/${notificationId}/read`, {}, { headers: withBearer(getCaregiverToken()) }),
+};
+
+export const adminAPI = {
+  getOverview: () => api.get<AdminMetricOverview>("/admin/overview", { headers: withBearer(getAdminToken()) }),
+  getBookings: (params?: { status?: string; payment_status?: string; search?: string }) =>
+    api.get<{ bookings: AdminBookingRecord[] }>("/admin/bookings", {
+      headers: withBearer(getAdminToken()),
+      params,
+    }),
+  getBookingDetail: (bookingId: number) =>
+    api.get<{ booking: AdminBookingRecord; eligible_caregivers: AdminCaregiverRecord[] }>(`/admin/bookings/${bookingId}`, {
+      headers: withBearer(getAdminToken()),
+    }),
+  reassignBooking: (bookingId: number, caregiver_id?: number) =>
+    api.post<{ message: string; booking: AdminBookingRecord }>(
+      `/admin/bookings/${bookingId}/reassign`,
+      { caregiver_id: caregiver_id ?? null },
+      { headers: withBearer(getAdminToken()) }
+    ),
+  cancelBooking: (bookingId: number, reason: string) =>
+    api.post<{ message: string; booking: AdminBookingRecord }>(
+      `/admin/bookings/${bookingId}/cancel`,
+      { reason },
+      { headers: withBearer(getAdminToken()) }
+    ),
+  getLiveJobs: () => api.get<{ jobs: AdminBookingRecord[] }>("/admin/live-jobs", { headers: withBearer(getAdminToken()) }),
+  getPaymentsSummary: () =>
+    api.get<{
+      summary: AdminPaymentSummary;
+      by_caregiver: AdminCaregiverEarning[];
+      transactions: AdminPaymentTransaction[];
+    }>("/admin/payments/summary", { headers: withBearer(getAdminToken()) }),
+  getCaregiverManagement: () =>
+    api.get<{ caregivers: AdminCaregiverRecord[] }>("/admin/caregivers", { headers: withBearer(getAdminToken()) }),
+  getApprovals: () => api.get<{ caregivers: CaregiverProfileSummary[] }>("/caregiver/all", { headers: withBearer(getAdminToken()) }),
+  approveCaregiver: (id: number) => api.post(`/caregiver/approve/${id}`, {}, { headers: withBearer(getAdminToken()) }),
+  rejectCaregiver: (id: number) => api.post(`/caregiver/reject/${id}`, {}, { headers: withBearer(getAdminToken()) }),
+  enableCaregiver: (id: number) => api.post(`/admin/caregivers/${id}/enable`, {}, { headers: withBearer(getAdminToken()) }),
+  disableCaregiver: (id: number) => api.post(`/admin/caregivers/${id}/disable`, {}, { headers: withBearer(getAdminToken()) }),
+  forceOfflineCaregiver: (id: number) =>
+    api.post(`/admin/caregivers/${id}/force-offline`, {}, { headers: withBearer(getAdminToken()) }),
+  getReviews: () => api.get<{ reviews: AdminReviewRecord[] }>("/admin/reviews", { headers: withBearer(getAdminToken()) }),
+  getNotifications: () =>
+    api.get<{ notifications: AppNotification[] }>("/admin/notifications", { headers: withBearer(getAdminToken()) }),
+};
+
+export const paymentAPI = {
+  createOrder: (bookingId: number) =>
+    api.post<PaymentOrderResponse>("/payment/create-order", { booking_id: bookingId }, { headers: withBearer(getUserToken()) }),
+  verify: (payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) =>
+    api.post<PaymentVerificationResponse>("/payment/verify", payload, { headers: withBearer(getUserToken()) }),
+  confirmCash: (bookingId: number) =>
+    api.post<PaymentVerificationResponse>("/payment/confirm-cash", { booking_id: bookingId }, { headers: withBearer(getUserToken()) }),
+  pay: (bookingId: number) => api.post(`/payment/pay/${bookingId}`, {}, { headers: withBearer(getUserToken()) }),
+  getStatus: (bookingId: number) =>
+    api.get<PaymentStatusResponse>(`/payment/status/${bookingId}`, { headers: withBearer(getUserToken()) }),
+};
+
+export const getWebSocketURL = (bookingId: string) => `${WS_BASE_URL}/tracking/ws/${bookingId}`;
+export const getTrackingWebSocketUrl = (bookingId: number | string) => `${WS_BASE_URL}/tracking/ws/${bookingId}`;
+export const getCaregiverDocumentUrl = (docId: number) => `${API_BASE_URL}/caregiver/document/${docId}`;
+export const getQrCodeUrl = (qrCodePath?: string | null) =>
+  qrCodePath ? `${API_BASE_URL}/${qrCodePath.replace(/^\/+/, "")}` : null;
+
+export default api;

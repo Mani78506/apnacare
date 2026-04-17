@@ -1,0 +1,40 @@
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, LargeBinary, String
+
+from app.database import Base
+
+
+class Booking(Base):
+    __tablename__ = "bookings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    caregiver_id = Column(Integer, ForeignKey("caregivers.id"))
+    service_type = Column(String)
+    notes = Column(String)
+    patient_id = Column(Integer)
+    patient_name = Column(String)
+    patient_age = Column(Integer)
+    patient_condition = Column(String)
+    duration_type = Column(String, default="hourly")
+    hours = Column(Integer)
+    days = Column(Integer)
+    months = Column(Integer)
+    status = Column(String, default="pending")
+    start_time = Column(DateTime)
+    end_time = Column(DateTime)
+    payment_method = Column(String, default="online")
+    payment_status = Column(String, default="pending")
+    payment_collected_method = Column(String, nullable=True)
+    amount = Column(Float, default=0)
+    razorpay_order_id = Column(String, nullable=True)
+    razorpay_payment_id = Column(String, nullable=True)
+    cancelled_by = Column(String)
+    cancel_reason = Column(String)
+    admin_notes = Column(String)
+    reassigned_from_caregiver_id = Column(Integer, ForeignKey("caregivers.id"))
+    otp = Column(String, nullable=True)
+    otp_verified = Column(Boolean, default=False)
+    qr_code_path = Column(String, nullable=True)
+    prescription_file_name = Column(String, nullable=True)
+    prescription_content_type = Column(String, nullable=True)
+    prescription_file_data = Column(LargeBinary, nullable=True)
