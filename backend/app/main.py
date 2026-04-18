@@ -188,7 +188,7 @@ os.makedirs("qr_codes", exist_ok=True)
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
-    "http://localhost:4000,http://127.0.0.1:4000" , "http://apnacare-fhcb.vercel.app"
+    "http://localhost:4000,https://apnacare-fhcb.vercel.app"
 )
 allowed_origins = [origin.strip() for origin in frontend_origins.split(",") if origin.strip()]
 
