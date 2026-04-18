@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, WebSocket, Depends, Header, HTTPException, WebSocketDisconnect
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -12,6 +14,7 @@ from app.services.document_service import serialize_document, sort_documents
 from app.services.websocket_manager import manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 def get_db():
     db = SessionLocal()
@@ -187,6 +190,7 @@ async def websocket_endpoint(websocket: WebSocket, booking_id: int):
     except WebSocketDisconnect:
         manager.disconnect(booking_id, websocket)
     except Exception:
+        logger.exception("Tracking websocket failed for booking_id=%s", booking_id)
         manager.disconnect(booking_id, websocket)
     finally:
         db.close()
