@@ -12,7 +12,7 @@ from app.models.user import User
 from app.schemas.payment import CashPaymentConfirmRequest, PaymentOrderCreate, PaymentVerifyRequest
 from app.services.auth_service import decode_access_token
 from app.services.booking_fulfillment_service import finalize_booking_assignment
-from app.services.notification_service import create_notification
+from app.services.notification_service import notify_user
 from app.services.razorpay_service import get_razorpay_client, get_razorpay_key_id
 
 router = APIRouter(prefix="/payment", tags=["Payment"])
@@ -77,22 +77,40 @@ def mark_booking_paid(
     caregiver_user = db.query(User).filter(User.id == caregiver.user_id).first() if caregiver else None
     patient_user = db.query(User).filter(User.id == booking.user_id).first()
     if patient_user:
-        create_notification(
+        notify_user(
             db,
             user_id=patient_user.id,
             role="user",
             title="Payment successful",
             message=f"Booking #{booking.id} payment has been recorded successfully via {payment_channel.replace('_', ' ')}.",
             type="payment_success",
+            email=patient_user.email,
+            phone=patient_user.phone,
+            recipient_name=patient_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Amount": f"Rs. {(booking.amount or 0):.2f}",
+                "Payment Mode": payment_channel.replace("_", " ").title(),
+            },
+            email_subject="ApnaCare payment successful",
         )
     if caregiver_user:
-        create_notification(
+        notify_user(
             db,
             user_id=caregiver_user.id,
             role="caregiver",
             title="Payment received",
             message=f"Payment for booking #{booking.id} has been recorded via {payment_channel.replace('_', ' ')}. Earnings credited: Rs. {caregiver_share:.2f}.",
             type="payment_received",
+            email=caregiver_user.email,
+            phone=caregiver.phone,
+            recipient_name=caregiver.full_name or caregiver_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Earnings": f"Rs. {caregiver_share:.2f}",
+                "Payment Mode": payment_channel.replace("_", " ").title(),
+            },
+            email_subject="ApnaCare payment received",
         )
 
     db.commit()
@@ -186,13 +204,22 @@ def verify_payment(
         if not caregiver:
             patient_user = db.query(User).filter(User.id == booking.user_id).first()
             if patient_user:
-                create_notification(
+                notify_user(
                     db,
                     user_id=patient_user.id,
                     role="user",
                     title="Payment verified",
                     message=f"Booking #{booking.id} payment is complete and caregiver assignment is waiting for availability.",
                     type="booking_pending_assignment",
+                    email=patient_user.email,
+                    phone=patient_user.phone,
+                    recipient_name=patient_user.name,
+                    details={
+                        "Booking ID": f"#{booking.id}",
+                        "Amount": f"Rs. {(booking.amount or 0):.2f}",
+                        "Status": "Waiting for caregiver availability",
+                    },
+                    email_subject="ApnaCare payment verified",
                 )
         db.commit()
         db.refresh(booking)

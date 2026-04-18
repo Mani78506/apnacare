@@ -20,7 +20,7 @@ from app.services.document_service import (
     sort_documents,
 )
 from app.services.booking_fulfillment_service import finalize_booking_assignment
-from app.services.notification_service import create_notification
+from app.services.notification_service import notify_user
 from app.services.pricing_service import calculate_amount, calculate_booking_end_time
 from app.services.task_service import ensure_default_tasks
 
@@ -188,22 +188,61 @@ def create_booking(
 
     patient_user = db.query(User).filter(User.id == user_id).first()
     if payment_method == "online" and patient_user:
-        create_notification(
+        notify_user(
             db,
             user_id=patient_user.id,
             role="user",
             title="Booking created",
             message=f"Booking #{booking.id} is waiting for payment confirmation before caregiver assignment.",
             type="booking_created",
+            email=patient_user.email,
+            phone=patient_user.phone,
+            recipient_name=patient_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Patient": booking.patient_name or patient_user.name,
+                "Service": booking.service_type or "Home care",
+                "Payment": "Online",
+            },
+            email_subject="ApnaCare booking created",
         )
     if payment_method == "cash_on_delivery" and patient_user and not caregiver:
-        create_notification(
+        notify_user(
             db,
             user_id=patient_user.id,
             role="user",
             title="Booking confirmed",
             message=f"Booking #{booking.id} is confirmed for cash on delivery and is waiting for caregiver availability.",
             type="booking_pending_assignment",
+            email=patient_user.email,
+            phone=patient_user.phone,
+            recipient_name=patient_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Patient": booking.patient_name or patient_user.name,
+                "Service": booking.service_type or "Home care",
+                "Payment": "Cash on delivery",
+            },
+            email_subject="ApnaCare booking confirmed",
+        )
+    if patient_user and payment_method == "cash_on_delivery":
+        notify_user(
+            db,
+            user_id=patient_user.id,
+            role="user",
+            title="Booking created",
+            message=f"Booking created successfully for {booking.service_type or 'care service'}.",
+            type="booking_created",
+            email=patient_user.email,
+            phone=patient_user.phone,
+            recipient_name=patient_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Patient": booking.patient_name or patient_user.name,
+                "Service": booking.service_type or "Home care",
+                "Payment": "Cash on delivery",
+            },
+            email_subject="ApnaCare booking created",
         )
     db.commit()
     db.refresh(booking)
@@ -455,22 +494,40 @@ def verify_booking_otp(
     patient_user = db.query(User).filter(User.id == booking.user_id).first()
     caregiver_user = db.query(User).filter(User.id == caregiver.user_id).first()
     if patient_user:
-        create_notification(
+        notify_user(
             db,
             user_id=patient_user.id,
             role="user",
             title="OTP verified",
             message=f"Booking #{booking.id} OTP has been verified. Caregiver service has started.",
             type="otp_verified",
+            email=patient_user.email,
+            phone=patient_user.phone,
+            recipient_name=patient_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Caregiver": caregiver.full_name or caregiver_user.name if caregiver_user else "Assigned caregiver",
+                "Status": "Started",
+            },
+            email_subject="ApnaCare service started",
         )
     if caregiver_user:
-        create_notification(
+        notify_user(
             db,
             user_id=caregiver_user.id,
             role="caregiver",
             title="OTP verified",
             message=f"Booking #{booking.id} is verified. You can now begin service.",
             type="otp_verified",
+            email=caregiver_user.email,
+            phone=caregiver.phone,
+            recipient_name=caregiver.full_name or caregiver_user.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Patient": patient_user.name if patient_user else "Patient",
+                "Status": "Started",
+            },
+            email_subject="ApnaCare OTP verified",
         )
     db.commit()
 

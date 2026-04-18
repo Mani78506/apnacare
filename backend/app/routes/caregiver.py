@@ -16,7 +16,7 @@ from app.schemas.caregiver import CaregiverAvailabilityUpdate, CaregiverLocation
 from app.services.assignment_service import reassign_booking_after_rejection, resolve_status_path, validate_status_transition
 from app.services.auth_service import decode_access_token, hash_password
 from app.services.document_service import get_primary_document, serialize_document, sort_documents
-from app.services.notification_service import create_notification
+from app.services.notification_service import notify_user
 from app.services.websocket_manager import manager
 
 router = APIRouter()
@@ -234,14 +234,41 @@ def update_status(
 
     patient = db.query(User).filter(User.id == booking.user_id).first()
     if patient:
-        create_notification(
+        notify_user(
             db,
             user_id=patient.id,
             role="user",
             title="Status updated",
             message=f"Booking #{booking.id} is now {booking.status.replace('_', ' ')}.",
             type="booking_status_updated",
+            email=patient.email,
+            phone=patient.phone,
+            recipient_name=patient.name,
+            details={
+                "Booking ID": f"#{booking.id}",
+                "Status": booking.status.replace("_", " ").title(),
+                "Service": booking.service_type or "Home care",
+            },
+            email_subject="ApnaCare booking status update",
         )
+        if booking.status == "completed":
+            notify_user(
+                db,
+                user_id=patient.id,
+                role="user",
+                title="Service completed",
+                message="Your service has been completed successfully.",
+                type="service_completed",
+                email=patient.email,
+                phone=patient.phone,
+                recipient_name=patient.name,
+                details={
+                    "Booking ID": f"#{booking.id}",
+                    "Status": "Completed",
+                    "Service": booking.service_type or "Home care",
+                },
+                email_subject="ApnaCare service completed",
+            )
     db.commit()
 
     return {"status": booking.status}

@@ -134,6 +134,36 @@ def ensure_caregiver_columns() -> None:
 ensure_caregiver_columns()
 
 
+def ensure_notification_columns() -> None:
+    inspector = inspect(engine)
+    if "notifications" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("notifications")}
+    statements: list[str] = []
+
+    if "user_email" not in existing_columns:
+        statements.append("ALTER TABLE notifications ADD COLUMN user_email VARCHAR")
+    if "user_phone" not in existing_columns:
+        statements.append("ALTER TABLE notifications ADD COLUMN user_phone VARCHAR")
+    if "email_status" not in existing_columns:
+        statements.append("ALTER TABLE notifications ADD COLUMN email_status VARCHAR DEFAULT 'not_requested'")
+    if "sms_status" not in existing_columns:
+        statements.append("ALTER TABLE notifications ADD COLUMN sms_status VARCHAR DEFAULT 'not_requested'")
+    if "delivery_error" not in existing_columns:
+        statements.append("ALTER TABLE notifications ADD COLUMN delivery_error TEXT")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+ensure_notification_columns()
+
+
 def migrate_legacy_caregiver_documents() -> None:
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
