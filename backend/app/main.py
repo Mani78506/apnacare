@@ -188,17 +188,18 @@ os.makedirs("qr_codes", exist_ok=True)
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
-    "http://localhost:4000,http://127.0.0.1:4000",
+    "http://localhost:4000,http://127.0.0.1:4000", 
 )
 allowed_origins = [origin.strip() for origin in frontend_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],  # allow all
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 app.mount("/qr_codes", StaticFiles(directory="qr_codes"), name="qr_codes")
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
