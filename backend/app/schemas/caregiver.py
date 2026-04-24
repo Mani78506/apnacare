@@ -22,6 +22,7 @@ class CaregiverStatusUpdate(BaseModel):
 class CaregiverAvailabilityUpdate(BaseModel):
     caregiver_id: int | None = None
     is_available: bool
+    address: str | None = None
     latitude: float | None = None
     longitude: float | None = None
 
@@ -32,6 +33,7 @@ class CaregiverProfileRegistration(BaseModel):
     password: str
     phone: str
     location: str
+    address: str | None = None
     gender: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -43,3 +45,10 @@ class CaregiverProfileRegistration(BaseModel):
     profile_photo: CaregiverDocumentInput | None = None
     id_proof: CaregiverDocumentInput | None = None
     certificate: CaregiverDocumentInput | None = None
+
+
+class CaregiverProfileLocationUpdate(BaseModel):
+    caregiver_id: int
+    address: str
+    latitude: float
+    longitude: float

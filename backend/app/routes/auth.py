@@ -17,6 +17,7 @@ from app.services.auth_service import (
 from app.services.assignment_service import validate_caregiver_gender, validate_coordinates
 from app.services.document_service import extract_registration_documents, replace_caregiver_documents
 from app.services.email_service import send_email
+from app.services.geocoding_service import resolve_address_coordinates
 
 router = APIRouter()
 
@@ -49,15 +50,32 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
         registration_documents = []
 
     caregiver_gender = validate_caregiver_gender(user.gender) if user.role == "caregiver" else None
-    caregiver_latitude, caregiver_longitude = (
-        validate_coordinates(
-            user.latitude,
-            user.longitude,
-            latitude_label="latitude",
-            longitude_label="longitude",
+    caregiver_address, caregiver_latitude, caregiver_longitude = (
+        resolve_address_coordinates(
+            address=user.address or user.location,
+            latitude=user.latitude,
+            longitude=user.longitude,
+            validate_coordinates=lambda latitude, longitude: validate_coordinates(
+                latitude,
+                longitude,
+                latitude_label="latitude",
+                longitude_label="longitude",
+            ),
+            geocode_failure_message="Unable to resolve coordinates for the caregiver address",
         )
         if user.role == "caregiver"
-        else (None, None)
+        else resolve_address_coordinates(
+            address=user.address,
+            latitude=user.latitude,
+            longitude=user.longitude,
+            validate_coordinates=lambda latitude, longitude: validate_coordinates(
+                latitude,
+                longitude,
+                latitude_label="latitude",
+                longitude_label="longitude",
+            ),
+            geocode_failure_message="Unable to resolve coordinates for the user address",
+        )
     )
 
     db_user = User(
@@ -65,7 +83,10 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
         phone=user.phone,
         email=user.email,
         password=hash_password(user.password),
-        role=user.role
+        role=user.role,
+        address=None if user.role == "caregiver" else caregiver_address,
+        latitude=None if user.role == "caregiver" else caregiver_latitude,
+        longitude=None if user.role == "caregiver" else caregiver_longitude,
     )
     db.add(db_user)
     db.commit()
@@ -77,7 +98,8 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
             user_id=db_user.id,
             full_name=user.name,
             phone=user.phone,
-            location=user.location,
+            location=caregiver_address or user.location or user.address,
+            address=caregiver_address or user.address or user.location,
             gender=caregiver_gender,
             experience=user.experience,
             skills=", ".join(user.skills or []),

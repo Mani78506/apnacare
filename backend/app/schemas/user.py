@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
     password: str
     role: str = "user"
     location: str | None = None
+    address: str | None = None
     gender: str | None = None
     latitude: float | None = None
     longitude: float | None = None

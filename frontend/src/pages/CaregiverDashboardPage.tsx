@@ -106,8 +106,13 @@ export default function CaregiverDashboardPage() {
   const toggleAvailability = async (checked: boolean) => {
     setBusy("availability");
     try {
+      const address = profile?.address || profile?.location || "";
       let latitude: number | undefined;
       let longitude: number | undefined;
+
+      if (checked && (!address || profile?.latitude == null || profile?.longitude == null) && !navigator.geolocation) {
+        throw new Error("Location is required to go online");
+      }
 
       if (checked && navigator.geolocation) {
         await new Promise<void>((resolve) => {
@@ -123,10 +128,16 @@ export default function CaregiverDashboardPage() {
         });
       }
 
-      await caregiverAPI.updateAvailability({ caregiver_id: profile?.id, is_available: checked, latitude, longitude });
+      await caregiverAPI.updateAvailability({
+        caregiver_id: profile?.id,
+        is_available: checked,
+        address: address || undefined,
+        latitude: latitude ?? profile?.latitude ?? undefined,
+        longitude: longitude ?? profile?.longitude ?? undefined,
+      });
       await loadDashboard(true);
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Unable to update availability.");
+      setError(err.response?.data?.detail || err.message || "Unable to update availability.");
     } finally {
       setBusy(null);
     }
@@ -329,7 +340,7 @@ export default function CaregiverDashboardPage() {
                 <Panel title="Profile and performance" icon={ShieldAlert}>
                   <div className="grid gap-3 md:grid-cols-2">
                     <Mini label="Full name" value={profile?.full_name || user?.name || "Caregiver"} />
-                    <Mini label="Location" value={profile?.location || "No location"} />
+                    <Mini label="Address" value={profile?.address || profile?.location || "No address"} />
                     <Mini label="Gender" value={profile?.gender ? profile.gender : "Not provided"} />
                     <Mini label="Coordinates" value={profile?.latitude !== undefined && profile?.latitude !== null && profile?.longitude !== undefined && profile?.longitude !== null ? `${profile.latitude.toFixed(4)}, ${profile.longitude.toFixed(4)}` : "Not shared"} />
                     <Mini label="Experience" value={profile?.experience ? `${profile.experience} years` : "Not provided"} />

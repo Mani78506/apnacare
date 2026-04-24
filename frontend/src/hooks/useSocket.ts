@@ -45,6 +45,8 @@ export function useSocket(bookingId: string | null) {
           }
           if (typeof data.lat === "number" && typeof data.lng === "number") {
             setCaregiverLocation({ lat: data.lat, lng: data.lng });
+          } else if (data.status === "pending" || data.status === "cancelled") {
+            setCaregiverLocation(null);
           }
           if (data.status) {
             setBookingStatus(data.status);
@@ -85,6 +87,7 @@ export function useSocket(bookingId: string | null) {
     return () => {
       isActive = false;
       clearTimers();
+      setCaregiverLocation(null);
       ws.current?.close();
     };
   }, [bookingId, setCaregiverLocation, setBookingStatus]);

@@ -77,6 +77,7 @@ def ensure_default_tasks(db: Session, booking_id: int) -> list[Task]:
             booking_id=booking_id,
             name=name,
             completed=False,
+            completed_at=None,
         )
         db.add(task)
         created_tasks.append(task)

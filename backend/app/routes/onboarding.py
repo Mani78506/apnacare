@@ -16,6 +16,7 @@ from app.services.document_service import (
     sort_documents,
     replace_caregiver_documents,
 )
+from app.services.geocoding_service import resolve_address_coordinates
 from app.services.notification_service import create_notification
 
 router = APIRouter(prefix="/caregiver", tags=["Caregiver Onboarding"])
@@ -68,6 +69,7 @@ def serialize_caregiver(caregiver: Caregiver, email: str | None = None):
         "phone": caregiver.phone,
         "email": email,
         "location": caregiver.location,
+        "address": caregiver.address or caregiver.location,
         "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
@@ -99,11 +101,17 @@ def register_caregiver(payload: CaregiverProfileRegistration, db: Session = Depe
         )
 
     caregiver_gender = validate_caregiver_gender(payload.gender)
-    caregiver_latitude, caregiver_longitude = validate_coordinates(
-        payload.latitude,
-        payload.longitude,
-        latitude_label="latitude",
-        longitude_label="longitude",
+    caregiver_address, caregiver_latitude, caregiver_longitude = resolve_address_coordinates(
+        address=payload.address or payload.location,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        validate_coordinates=lambda latitude, longitude: validate_coordinates(
+            latitude,
+            longitude,
+            latitude_label="latitude",
+            longitude_label="longitude",
+        ),
+        geocode_failure_message="Unable to resolve coordinates for the caregiver address",
     )
 
     user = User(
@@ -121,7 +129,8 @@ def register_caregiver(payload: CaregiverProfileRegistration, db: Session = Depe
         user_id=user.id,
         full_name=payload.name,
         phone=payload.phone,
-        location=payload.location,
+        location=caregiver_address or payload.location or payload.address,
+        address=caregiver_address or payload.address or payload.location,
         gender=caregiver_gender,
         skills=", ".join(payload.skills),
         experience=payload.experience,

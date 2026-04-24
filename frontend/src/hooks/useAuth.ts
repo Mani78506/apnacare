@@ -43,6 +43,7 @@ export function useAuth() {
     password: string;
     role?: "user" | "caregiver";
     location?: string;
+    address?: string;
     gender?: "male" | "female" | "other";
     latitude?: number;
     longitude?: number;

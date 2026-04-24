@@ -2,6 +2,7 @@ from datetime import datetime
 import logging
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile
+from sqlalchemy.exc import SQLAlchemyError
 from jose import JWTError
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,7 @@ from app.models.document import Document
 from app.models.review import Review
 from app.models.user import User
 from app.schemas.booking import BookingCreate, BookingOtpVerify
-from app.services.assignment_service import validate_coordinates, validate_preferred_gender
+from app.services.assignment_service import validate_coordinates, validate_preferred_gender, validate_search_radius_km
 from app.schemas.review import ReviewCreate
 from app.services.auth_service import decode_access_token
 from app.services.assignment_service import reassign_booking_after_rejection
@@ -24,6 +25,7 @@ from app.services.document_service import (
 )
 from app.services.booking_fulfillment_service import finalize_booking_assignment
 from app.services.face_verification_service import verify_faces
+from app.services.geocoding_service import resolve_address_coordinates
 from app.services.notification_service import notify_user
 from app.services.pricing_service import calculate_amount, calculate_booking_end_time
 from app.services.task_service import ensure_default_tasks
@@ -85,8 +87,10 @@ def serialize_booking(
         "patient_age": booking.patient_age,
         "patient_condition": booking.patient_condition,
         "preferred_gender": booking.preferred_gender,
+        "user_address": booking.user_address,
         "user_latitude": booking.user_latitude,
         "user_longitude": booking.user_longitude,
+        "search_radius_km": booking.search_radius_km,
         "assigned_distance_km": booking.assigned_distance_km,
         "assignment_reason": booking.assignment_reason,
         "service_type": booking.service_type,
@@ -117,6 +121,7 @@ def serialize_booking(
                 "phone": caregiver.phone,
                 "email": caregiver_user.email if caregiver_user else None,
                 "gender": caregiver.gender,
+                "address": caregiver.address or caregiver.location,
                 "experience": caregiver.experience,
                 "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
                 "rating": caregiver.rating,
@@ -168,11 +173,18 @@ def create_booking(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     preferred_gender = validate_preferred_gender(data.preferred_gender)
-    user_latitude, user_longitude = validate_coordinates(
-        data.user_latitude,
-        data.user_longitude,
-        latitude_label="user_latitude",
-        longitude_label="user_longitude",
+    search_radius_km = validate_search_radius_km(data.search_radius_km)
+    user_address, user_latitude, user_longitude = resolve_address_coordinates(
+        address=data.user_address,
+        latitude=data.user_latitude,
+        longitude=data.user_longitude,
+        validate_coordinates=lambda latitude, longitude: validate_coordinates(
+            latitude,
+            longitude,
+            latitude_label="user_latitude",
+            longitude_label="user_longitude",
+        ),
+        geocode_failure_message="Unable to resolve coordinates for the patient address",
     )
 
     booking = Booking(
@@ -191,8 +203,10 @@ def create_booking(
         patient_age=data.age,
         patient_condition=data.patient_condition,
         preferred_gender=preferred_gender,
+        user_address=user_address,
         user_latitude=user_latitude,
         user_longitude=user_longitude,
+        search_radius_km=search_radius_km,
         start_time=start_time,
         end_time=end_time,
         status="pending",
@@ -207,12 +221,29 @@ def create_booking(
     db.add(booking)
     db.flush()
 
+    patient_user = db.query(User).filter(User.id == user_id).first()
+    if patient_user:
+        if user_address:
+            patient_user.address = user_address
+        if user_latitude is not None and user_longitude is not None:
+            patient_user.latitude = user_latitude
+            patient_user.longitude = user_longitude
+
     caregiver = None
     caregiver_user = None
     if payment_method == "cash_on_delivery":
         caregiver, _, caregiver_user = finalize_booking_assignment(db, booking)
+        if not caregiver:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Location required for smart caregiver assignment."
+                    if booking.user_latitude is None or booking.user_longitude is None
+                    else "No available caregiver found in your selected range"
+                ),
+            )
 
-    patient_user = db.query(User).filter(User.id == user_id).first()
     if payment_method == "online" and patient_user:
         notify_user(
             db,
@@ -270,12 +301,18 @@ def create_booking(
             },
             email_subject="ApnaCare booking created",
         )
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
     db.refresh(booking)
 
     return {
         "message": (
-            "Booking created but no matching caregiver available"
+            "Location required for smart caregiver assignment."
+            if payment_method == "cash_on_delivery" and booking.user_latitude is None
+            else "No available caregiver found in your selected range"
             if payment_method == "cash_on_delivery" and not caregiver and booking.status == "pending"
             else "Booking created successfully"
         ),
@@ -292,6 +329,8 @@ def create_booking(
         "months": booking.months,
         "amount": booking.amount,
         "preferred_gender": booking.preferred_gender,
+        "user_address": booking.user_address,
+        "search_radius_km": booking.search_radius_km,
         "assigned_distance_km": booking.assigned_distance_km,
         "assignment_reason": booking.assignment_reason,
         "payment_method": booking.payment_method,
@@ -305,6 +344,7 @@ def create_booking(
                 "name": caregiver.full_name,
                 "phone": caregiver.phone,
                 "gender": caregiver.gender,
+                "address": caregiver.address or caregiver.location,
                 "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
                 "experience": caregiver.experience,
                 "rating": caregiver.rating,

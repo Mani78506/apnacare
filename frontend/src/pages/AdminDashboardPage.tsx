@@ -94,7 +94,7 @@ export default function AdminDashboardPage() {
 
   const filteredApprovals = useMemo(() => approvals.filter((x) => {
     const q = approvalQuery.trim().toLowerCase();
-    const hit = [x.full_name, x.email, x.phone, x.location, x.document_name, x.skills.join(", ")].filter(Boolean).join(" ").toLowerCase();
+    const hit = [x.full_name, x.email, x.phone, x.address, x.location, x.document_name, x.skills.join(", ")].filter(Boolean).join(" ").toLowerCase();
     return (approvalFilter === "all" || x.status === approvalFilter) && hit.includes(q);
   }), [approvalFilter, approvalQuery, approvals]);
 

@@ -21,6 +21,7 @@ from app.services.document_service import get_primary_document, serialize_docume
 from app.services.notification_service import create_notification
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
+ACTIVE_BOOKING_STATUSES = {"assigned", "accepted", "on_the_way", "arrived", "started"}
 
 
 def get_current_admin(
@@ -81,6 +82,7 @@ def serialize_booking(
             "email": caregiver_user.email if caregiver_user else None,
             "phone": caregiver.phone if caregiver else None,
             "gender": caregiver.gender if caregiver else None,
+            "address": (caregiver.address or caregiver.location) if caregiver else None,
             "status": caregiver.status if caregiver else None,
             "is_available": caregiver.is_available if caregiver else None,
             "is_enabled": caregiver.is_enabled if caregiver else None,
@@ -130,6 +132,7 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None, stats: dict | N
         "email": user.email if user else None,
         "phone": caregiver.phone,
         "location": caregiver.location,
+        "address": caregiver.address or caregiver.location,
         "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
@@ -242,12 +245,19 @@ def get_booking_detail(
         db.query(Caregiver)
         .filter(
             Caregiver.status == "approved",
+            Caregiver.is_verified == True,
+            Caregiver.is_available == True,
             Caregiver.is_enabled == True,
             Caregiver.forced_offline == False,
         )
         .order_by(Caregiver.full_name.asc())
         .all()
     )
+    available_caregivers = [
+        item
+        for item in available_caregivers
+        if not db.query(Booking).filter(Booking.caregiver_id == item.id, Booking.status.in_(ACTIVE_BOOKING_STATUSES)).first()
+    ]
 
     return {
         "booking": serialize_booking(booking, patient, caregiver, caregiver_user),
@@ -280,7 +290,18 @@ def reassign_booking(
         next_caregiver = db.query(Caregiver).filter(Caregiver.id == payload.caregiver_id).first()
         if not next_caregiver:
             raise HTTPException(status_code=404, detail="Target caregiver not found")
-        if next_caregiver.status != "approved" or not next_caregiver.is_enabled or next_caregiver.forced_offline:
+        has_active_booking = db.query(Booking).filter(
+            Booking.caregiver_id == next_caregiver.id,
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+        ).first()
+        if (
+            next_caregiver.status != "approved"
+            or not next_caregiver.is_verified
+            or not next_caregiver.is_available
+            or not next_caregiver.is_enabled
+            or next_caregiver.forced_offline
+            or has_active_booking
+        ):
             raise HTTPException(status_code=400, detail="Target caregiver is not available for reassignment")
     else:
         next_caregiver = assign_best_caregiver(

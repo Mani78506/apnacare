@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { locationAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,6 +32,7 @@ export default function SignupPage() {
     password: "",
     role: "user" as "user" | "caregiver",
     location: "",
+    address: "",
     gender: "",
     latitude: "",
     longitude: "",
@@ -42,6 +44,8 @@ export default function SignupPage() {
   });
   const { signup, loading } = useAuth();
   const isCaregiver = form.role === "caregiver";
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [lastResolvedAddress, setLastResolvedAddress] = useState("");
 
   const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((current) => ({ ...current, [field]: e.target.value }));
@@ -89,6 +93,7 @@ export default function SignupPage() {
       password: form.password,
       role: form.role,
       location: isCaregiver ? form.location : undefined,
+      address: isCaregiver ? form.address || form.location : undefined,
       gender: isCaregiver && form.gender ? (form.gender as "male" | "female" | "other") : undefined,
       latitude: isCaregiver && form.latitude ? Number(form.latitude) : undefined,
       longitude: isCaregiver && form.longitude ? Number(form.longitude) : undefined,
@@ -110,6 +115,8 @@ export default function SignupPage() {
       (position) => {
         setForm((current) => ({
           ...current,
+          address: current.address || "Current location selected",
+          location: current.location || current.address || "Current location selected",
           latitude: String(position.coords.latitude),
           longitude: String(position.coords.longitude),
         }));
@@ -119,6 +126,74 @@ export default function SignupPage() {
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
     );
   };
+
+  const resolveCaregiverAddress = async () => {
+    const address = form.address.trim();
+    if (!address) {
+      toast.error("Enter the caregiver address first.");
+      return;
+    }
+
+    setResolvingAddress(true);
+    try {
+      const { data } = await locationAPI.geocodeAddress(address);
+      setForm((current) => ({
+        ...current,
+        address: data.address,
+        location: data.address,
+        latitude: String(data.latitude),
+        longitude: String(data.longitude),
+      }));
+      setLastResolvedAddress(data.address.trim().toLowerCase());
+      toast.success("Coordinates fetched from address");
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Unable to fetch coordinates for this address.");
+    } finally {
+      setResolvingAddress(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isCaregiver) {
+      return;
+    }
+
+    const address = form.address.trim();
+    if (!address || address.length < 8) {
+      return;
+    }
+
+    const normalized = address.toLowerCase();
+    if (normalized === lastResolvedAddress || resolvingAddress) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        setResolvingAddress(true);
+        const { data } = await locationAPI.geocodeAddress(address);
+        setForm((current) => {
+          if (current.address.trim().toLowerCase() !== normalized) {
+            return current;
+          }
+          return {
+            ...current,
+            address: data.address,
+            location: data.address,
+            latitude: String(data.latitude),
+            longitude: String(data.longitude),
+          };
+        });
+        setLastResolvedAddress(data.address.trim().toLowerCase());
+      } catch {
+        // Leave manual address untouched when auto-geocoding misses.
+      } finally {
+        setResolvingAddress(false);
+      }
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [form.address, isCaregiver, lastResolvedAddress, resolvingAddress]);
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(34,211,238,0.16),_transparent_26%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.14),_transparent_24%),linear-gradient(180deg,_#f6fbff_0%,_#f9fcff_100%)] px-4 py-4 lg:py-3">
@@ -248,17 +323,30 @@ export default function SignupPage() {
 
                 {isCaregiver ? (
                   <div className="space-y-2">
-                    <Label>Location</Label>
+                    <Label>Address</Label>
                     <div className="relative">
                       <MapPin className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
                       <Input
-                        placeholder="City or service area"
+                        placeholder="Home base, city, or service address"
                         className="h-12 rounded-2xl border-slate-200 pl-10"
-                        value={form.location}
-                        onChange={update("location")}
+                        value={form.address}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            address: event.target.value,
+                            location: event.target.value,
+                          }))
+                        }
                         required={isCaregiver}
                       />
                     </div>
+                    <p className="text-xs text-slate-500">
+                      {resolvingAddress
+                        ? "Fetching coordinates from the typed caregiver address..."
+                        : form.latitude && form.longitude
+                          ? "Coordinates are ready from address or current location."
+                          : "Type the address and wait, or use the location buttons below."}
+                    </p>
                   </div>
                 ) : null}
               </div>
@@ -306,9 +394,14 @@ export default function SignupPage() {
                         </div>
                         <div className="space-y-2">
                           <Label>Current location</Label>
-                          <Button type="button" variant="outline" className="h-12 w-full rounded-2xl border-slate-200 bg-white" onClick={captureCaregiverLocation}>
-                            Use My Current Location
-                          </Button>
+                          <div className="grid gap-2">
+                            <Button type="button" variant="outline" className="h-12 w-full rounded-2xl border-slate-200 bg-white" onClick={() => void resolveCaregiverAddress()} disabled={resolvingAddress}>
+                              {resolvingAddress ? "Fetching from address..." : "Use Address"}
+                            </Button>
+                            <Button type="button" variant="outline" className="h-12 w-full rounded-2xl border-slate-200 bg-white" onClick={captureCaregiverLocation}>
+                              Use My Current Location
+                            </Button>
+                          </div>
                         </div>
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">

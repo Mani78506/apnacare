@@ -12,7 +12,12 @@ from app.models.notification import Notification
 from app.models.payment_transaction import PaymentTransaction
 from app.models.review import Review
 from app.models.user import User
-from app.schemas.caregiver import CaregiverAvailabilityUpdate, CaregiverLocationUpdate, CaregiverStatusUpdate
+from app.schemas.caregiver import (
+    CaregiverAvailabilityUpdate,
+    CaregiverLocationUpdate,
+    CaregiverProfileLocationUpdate,
+    CaregiverStatusUpdate,
+)
 from app.services.assignment_service import (
     reassign_booking_after_rejection,
     resolve_status_path,
@@ -21,6 +26,7 @@ from app.services.assignment_service import (
 )
 from app.services.auth_service import decode_access_token, hash_password
 from app.services.document_service import get_primary_document, serialize_document, sort_documents
+from app.services.geocoding_service import resolve_address_coordinates
 from app.services.notification_service import notify_user
 from app.services.websocket_manager import manager
 
@@ -111,6 +117,7 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None = None):
         "phone": caregiver.phone,
         "email": user.email if user else None,
         "location": caregiver.location,
+        "address": caregiver.address or caregiver.location,
         "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
@@ -310,8 +317,30 @@ def toggle_availability(
     if data.is_available and caregiver_has_active_booking(db, caregiver.id):
         raise HTTPException(status_code=400, detail="Complete the active booking before going available again.")
 
-    latitude, longitude = validate_coordinates(data.latitude, data.longitude) if (data.latitude is not None or data.longitude is not None) else (None, None)
+    next_address = (data.address or caregiver.address or caregiver.location or "").strip() or None
+    latitude = None
+    longitude = None
+    if next_address and (data.latitude is not None or data.longitude is not None or data.is_available):
+        resolved_address, latitude, longitude = resolve_address_coordinates(
+            address=next_address,
+            latitude=data.latitude,
+            longitude=data.longitude,
+            validate_coordinates=validate_coordinates,
+            geocode_failure_message="Unable to resolve coordinates for the caregiver address",
+        )
+        next_address = resolved_address or next_address
+    elif data.latitude is not None or data.longitude is not None:
+        latitude, longitude = validate_coordinates(data.latitude, data.longitude)
+
+    effective_latitude = latitude if latitude is not None else caregiver.latitude
+    effective_longitude = longitude if longitude is not None else caregiver.longitude
+    if data.is_available and (not next_address or effective_latitude is None or effective_longitude is None):
+        raise HTTPException(status_code=400, detail="Location is required to go online")
+
     caregiver.is_available = data.is_available
+    if next_address:
+        caregiver.address = next_address
+        caregiver.location = next_address
     if latitude is not None and longitude is not None:
         caregiver.latitude = latitude
         caregiver.longitude = longitude
@@ -320,6 +349,38 @@ def toggle_availability(
 
     user = db.query(User).filter(User.id == caregiver.user_id).first()
     return {"message": "Availability updated", "caregiver": serialize_caregiver(caregiver, user=user)}
+
+
+@router.post("/update-profile-location")
+def update_profile_location(
+    data: CaregiverProfileLocationUpdate,
+    db: Session = Depends(get_db),
+    caregiver: Caregiver = Depends(get_current_caregiver),
+):
+    if data.caregiver_id != caregiver.id:
+        raise HTTPException(status_code=403, detail="Location update does not match signed-in caregiver")
+
+    address = data.address.strip()
+    if not address:
+        raise HTTPException(status_code=400, detail="Address is required")
+
+    resolved_address, latitude, longitude = resolve_address_coordinates(
+        address=address,
+        latitude=data.latitude,
+        longitude=data.longitude,
+        validate_coordinates=validate_coordinates,
+        geocode_failure_message="Unable to resolve coordinates for the caregiver address",
+    )
+
+    caregiver.address = resolved_address or address
+    caregiver.location = resolved_address or address
+    caregiver.latitude = latitude
+    caregiver.longitude = longitude
+    db.commit()
+    db.refresh(caregiver)
+
+    user = db.query(User).filter(User.id == caregiver.user_id).first()
+    return {"message": "Caregiver location updated", "caregiver": serialize_caregiver(caregiver, user=user)}
 
 
 @router.post("/availability")
@@ -557,6 +618,7 @@ def add_dummy(db: Session = Depends(get_db)):
             full_name=user.name,
             phone=user.phone,
             location="Hyderabad",
+            address="Hyderabad",
             experience=2,
             skills="elder care",
             status="approved",
@@ -575,6 +637,7 @@ def add_dummy(db: Session = Depends(get_db)):
         caregiver.full_name = user.name
         caregiver.phone = user.phone
         caregiver.location = caregiver.location or "Hyderabad"
+        caregiver.address = caregiver.address or caregiver.location or "Hyderabad"
         caregiver.status = "approved"
         caregiver.is_verified = True
         caregiver.is_available = True

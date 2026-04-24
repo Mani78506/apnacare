@@ -22,6 +22,8 @@ VALID_STATUS_FLOW: dict[str, list[str]] = {
     "started": ["completed"],
 }
 
+ACTIVE_BOOKING_STATUSES = {"assigned", "accepted", "on_the_way", "arrived", "started"}
+
 
 def validate_preferred_gender(value: str | None) -> str:
     normalized = (value or "any").strip().lower()
@@ -51,15 +53,19 @@ def validate_coordinates(latitude: float | None, longitude: float | None, *, lat
     return float(latitude), float(longitude)
 
 
+def validate_search_radius_km(value: float | None) -> float:
+    radius = float(value if value is not None else 10)
+    if radius <= 0 or radius > 50:
+        raise HTTPException(status_code=400, detail="search_radius_km must be greater than 0 and less than or equal to 50")
+    return radius
+
+
 def validate_status_transition(current: str, new: str) -> None:
     if new not in VALID_STATUS_FLOW.get(current, []):
         raise HTTPException(status_code=400, detail="Invalid status transition")
 
 
-def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    if geodesic is not None:
-        return float(geodesic((lat1, lon1), (lat2, lon2)).km)
-
+def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     earth_radius_km = 6371.0
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
@@ -70,6 +76,12 @@ def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) ->
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return earth_radius_km * c
+
+
+def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    if geodesic is not None:
+        return float(geodesic((lat1, lon1), (lat2, lon2)).km)
+    return haversine_distance_km(lat1, lon1, lat2, lon2)
 
 
 def _split_skill_tags(value: str | None) -> set[str]:
@@ -101,6 +113,18 @@ def _skill_match_score(caregiver: Caregiver, booking: Booking) -> int:
     return score
 
 
+def _caregiver_has_active_booking(db: Session, caregiver_id: int) -> bool:
+    return (
+        db.query(Booking)
+        .filter(
+            Booking.caregiver_id == caregiver_id,
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+        )
+        .first()
+        is not None
+    )
+
+
 def _available_caregiver_query(db: Session):
     return db.query(Caregiver).filter(
         Caregiver.status == "approved",
@@ -111,114 +135,85 @@ def _available_caregiver_query(db: Session):
     )
 
 
-def _build_assignment_reason(
-    booking: Booking,
-    caregiver: Caregiver,
-    skill_score: int,
-    distance_km: float | None,
-) -> str:
-    reason_parts = ["approved", "available"]
-    if booking.preferred_gender and booking.preferred_gender != "any":
-        reason_parts.append(f"{booking.preferred_gender} preference")
-    if skill_score > 0:
-        if booking.service_type:
-            reason_parts.append(f"service match for {booking.service_type.replace('_', ' ')}")
-        if booking.patient_condition:
-            reason_parts.append(f"condition match for {booking.patient_condition.replace('_', ' ')}")
-    if distance_km is not None:
-        reason_parts.append(f"nearest distance at {distance_km:.1f} km")
-    else:
-        reason_parts.append(f"rating fallback {round(caregiver.rating or 0, 1):.1f}")
-
-    return "Assigned based on " + ", ".join(reason_parts) + "."
+def _reset_pending_assignment(booking: Booking, message: str) -> None:
+    booking.caregiver_id = None
+    booking.status = "pending"
+    booking.assigned_distance_km = None
+    booking.assignment_reason = message
 
 
-def assign_best_caregiver(db: Session, booking: Booking, excluded_caregiver_ids: set[int] | None = None) -> Caregiver | None:
+def find_best_caregiver(db: Session, booking: Booking, excluded_caregiver_ids: set[int] | None = None) -> Caregiver | None:
     excluded_caregiver_ids = excluded_caregiver_ids or set()
+    if booking.user_latitude is None or booking.user_longitude is None:
+        _reset_pending_assignment(booking, "Location required for smart caregiver assignment.")
+        return None
 
-    query = _available_caregiver_query(db)
+    radius_km = validate_search_radius_km(booking.search_radius_km)
+    booking.search_radius_km = radius_km
+
+    query = _available_caregiver_query(db).filter(
+        Caregiver.latitude.is_not(None),
+        Caregiver.longitude.is_not(None),
+    )
     if booking.preferred_gender and booking.preferred_gender != "any":
         query = query.filter(Caregiver.gender == booking.preferred_gender)
     if excluded_caregiver_ids:
         query = query.filter(~Caregiver.id.in_(excluded_caregiver_ids))
 
     candidates = query.all()
-    if not candidates:
-        booking.caregiver_id = None
-        booking.status = "pending"
-        booking.assigned_distance_km = None
-        booking.assignment_reason = "No caregiver matched the current approval, availability, skill, gender, and distance filters."
-        return None
-
-    has_user_coordinates = booking.user_latitude is not None and booking.user_longitude is not None
-
-    ranked: list[tuple[float, float, int, int, Caregiver, float | None]] = []
-    fallback_ranked: list[tuple[float, float, int, Caregiver]] = []
+    ranked: list[tuple[float, float, float, float, int, Caregiver]] = []
 
     for caregiver in candidates:
-        skill_score = _skill_match_score(caregiver, booking)
+        if _caregiver_has_active_booking(db, caregiver.id):
+            continue
+
+        distance_km = calculate_distance_km(
+            float(booking.user_latitude),
+            float(booking.user_longitude),
+            float(caregiver.latitude),
+            float(caregiver.longitude),
+        )
+        if distance_km > radius_km:
+            continue
+
         rating = float(caregiver.rating or 0)
+        experience = float(caregiver.experience or 0)
+        skill_score = _skill_match_score(caregiver, booking)
+        ranked.append((distance_km, -rating, -experience, -skill_score, caregiver.id, caregiver))
 
-        if has_user_coordinates and caregiver.latitude is not None and caregiver.longitude is not None:
-            distance_km = calculate_distance_km(
-                float(booking.user_latitude),
-                float(booking.user_longitude),
-                float(caregiver.latitude),
-                float(caregiver.longitude),
-            )
-            score = distance_km - (rating * 0.2) - (skill_score * 0.5)
-            ranked.append((score, distance_km, -skill_score, -rating, caregiver, distance_km))
-        else:
-            fallback_score = -(skill_score * 0.5) - (rating * 0.2)
-            fallback_ranked.append((fallback_score, -rating, -skill_score, caregiver))
-
-    selected: Caregiver | None = None
-    selected_distance: float | None = None
-    selected_skill_score = 0
-
-    if ranked:
-        ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3], item[4].id))
-        _, _, _, _, selected, selected_distance = ranked[0]
-        selected_skill_score = _skill_match_score(selected, booking)
-    elif fallback_ranked:
-        fallback_ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3].id))
-        _, _, _, selected = fallback_ranked[0]
-        selected_distance = None
-        selected_skill_score = _skill_match_score(selected, booking)
-
-    if not selected:
-        booking.caregiver_id = None
-        booking.status = "pending"
-        booking.assigned_distance_km = None
-        booking.assignment_reason = "No caregiver matched the current approval, availability, skill, gender, and distance filters."
+    if not ranked:
+        _reset_pending_assignment(booking, "No available caregiver found within selected range.")
         return None
 
+    ranked.sort(key=lambda item: item[:5])
+    distance_km, _, _, _, _, selected = ranked[0]
     booking.caregiver_id = selected.id
     validate_status_transition(booking.status or "pending", "assigned")
     booking.status = "assigned"
-    booking.assigned_distance_km = round(selected_distance, 2) if selected_distance is not None else None
-    booking.assignment_reason = _build_assignment_reason(booking, selected, selected_skill_score, booking.assigned_distance_km)
+    booking.assigned_distance_km = round(distance_km, 2)
+    booking.assignment_reason = "Assigned based on availability, location range, rating, and experience."
     refresh_booking_security_artifacts(booking)
     selected.is_available = False
     return selected
 
 
+def assign_best_caregiver(db: Session, booking: Booking, excluded_caregiver_ids: set[int] | None = None) -> Caregiver | None:
+    return find_best_caregiver(db, booking, excluded_caregiver_ids)
+
+
 def assign_caregiver(db: Session, booking: Booking) -> Caregiver | None:
-    return assign_best_caregiver(db, booking)
+    return find_best_caregiver(db, booking)
 
 
 def reassign_booking_after_rejection(db: Session, booking: Booking, current_caregiver: Caregiver) -> Caregiver | None:
     booking.reassigned_from_caregiver_id = current_caregiver.id
     current_caregiver.is_available = current_caregiver.is_enabled and not current_caregiver.forced_offline
 
-    next_caregiver = assign_best_caregiver(db, booking, excluded_caregiver_ids={current_caregiver.id})
+    next_caregiver = find_best_caregiver(db, booking, excluded_caregiver_ids={current_caregiver.id})
     if next_caregiver:
         return next_caregiver
 
-    booking.caregiver_id = None
-    booking.status = "pending"
-    booking.assigned_distance_km = None
-    booking.assignment_reason = "No alternate caregiver available after rejection."
+    _reset_pending_assignment(booking, "No available caregiver found in your selected range")
     booking.otp = None
     booking.otp_verified = False
     booking.face_verified = False

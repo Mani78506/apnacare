@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from app.database import Base
 
 class Task(Base):
@@ -9,3 +9,4 @@ class Task(Base):
 
     name = Column(String)
     completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime, nullable=True)
