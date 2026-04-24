@@ -6,6 +6,7 @@ from app.models.caregiver import Caregiver
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin
 from app.services.auth_service import hash_password, verify_password, create_access_token
+from app.services.assignment_service import validate_caregiver_gender, validate_coordinates
 from app.services.document_service import extract_registration_documents, replace_caregiver_documents
 
 router = APIRouter()
@@ -38,6 +39,18 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
     else:
         registration_documents = []
 
+    caregiver_gender = validate_caregiver_gender(user.gender) if user.role == "caregiver" else None
+    caregiver_latitude, caregiver_longitude = (
+        validate_coordinates(
+            user.latitude,
+            user.longitude,
+            latitude_label="latitude",
+            longitude_label="longitude",
+        )
+        if user.role == "caregiver"
+        else (None, None)
+    )
+
     db_user = User(
         name=user.name,
         phone=user.phone,
@@ -56,6 +69,7 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
             full_name=user.name,
             phone=user.phone,
             location=user.location,
+            gender=caregiver_gender,
             experience=user.experience,
             skills=", ".join(user.skills or []),
             status="pending",
@@ -63,8 +77,8 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
             document_name=registration_documents[0]["file_name"] if registration_documents else user.document_name,
             document_content_type=registration_documents[0]["content_type"] if registration_documents else user.document_content_type,
             document_data=user.document_data if not registration_documents else None,
-            latitude=17.3850,
-            longitude=78.4867,
+            latitude=caregiver_latitude,
+            longitude=caregiver_longitude,
             is_available=False,
             rating=0,
         )

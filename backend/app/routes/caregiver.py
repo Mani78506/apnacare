@@ -13,7 +13,12 @@ from app.models.payment_transaction import PaymentTransaction
 from app.models.review import Review
 from app.models.user import User
 from app.schemas.caregiver import CaregiverAvailabilityUpdate, CaregiverLocationUpdate, CaregiverStatusUpdate
-from app.services.assignment_service import reassign_booking_after_rejection, resolve_status_path, validate_status_transition
+from app.services.assignment_service import (
+    reassign_booking_after_rejection,
+    resolve_status_path,
+    validate_coordinates,
+    validate_status_transition,
+)
 from app.services.auth_service import decode_access_token, hash_password
 from app.services.document_service import get_primary_document, serialize_document, sort_documents
 from app.services.notification_service import notify_user
@@ -48,6 +53,17 @@ def get_db():
 
 
 ACTIVE_BOOKING_STATUSES = ["assigned", "accepted", "on_the_way", "arrived", "started"]
+
+
+def can_start_service(booking: Booking) -> bool:
+    return bool(
+        booking.otp_verified
+        and (
+            booking.face_verified
+            or booking.manual_override
+            or booking.face_verification_status == "manual_override"
+        )
+    )
 
 
 def caregiver_has_active_booking(db: Session, caregiver_id: int) -> bool:
@@ -95,6 +111,7 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None = None):
         "phone": caregiver.phone,
         "email": user.email if user else None,
         "location": caregiver.location,
+        "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
         "status": caregiver.status,
@@ -106,6 +123,8 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None = None):
         "document_uploaded": bool(documents) or bool(caregiver.document_data),
         "documents": [serialize_document(document) for document in documents],
         "rating": caregiver.rating,
+        "latitude": caregiver.latitude,
+        "longitude": caregiver.longitude,
     }
 
 def broadcast_booking_update(booking_id: int, payload: dict):
@@ -202,9 +221,9 @@ def update_status(
         reassign_booking_after_rejection(db, booking, caregiver)
         caregiver.is_available = False
     else:
-        if data.status == "started":
-            raise HTTPException(status_code=400, detail="Verify the patient OTP before starting care.")
         for next_status in resolve_status_path(booking.status, data.status):
+            if next_status == "started" and not can_start_service(booking):
+                raise HTTPException(status_code=400, detail="OTP and face verification are required before starting service")
             validate_status_transition(booking.status, next_status)
             booking.status = next_status
 
@@ -291,10 +310,16 @@ def toggle_availability(
     if data.is_available and caregiver_has_active_booking(db, caregiver.id):
         raise HTTPException(status_code=400, detail="Complete the active booking before going available again.")
 
+    latitude, longitude = validate_coordinates(data.latitude, data.longitude) if (data.latitude is not None or data.longitude is not None) else (None, None)
     caregiver.is_available = data.is_available
+    if latitude is not None and longitude is not None:
+        caregiver.latitude = latitude
+        caregiver.longitude = longitude
     db.commit()
+    db.refresh(caregiver)
 
-    return {"message": "Availability updated"}
+    user = db.query(User).filter(User.id == caregiver.user_id).first()
+    return {"message": "Availability updated", "caregiver": serialize_caregiver(caregiver, user=user)}
 
 
 @router.post("/availability")

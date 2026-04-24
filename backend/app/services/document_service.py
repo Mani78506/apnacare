@@ -6,7 +6,14 @@ from fastapi import HTTPException
 from app.models.document import Document
 
 MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024
-DOCUMENT_ORDER = {"profile": 0, "id": 1, "certificate": 2}
+DOCUMENT_ORDER = {
+    "profile": 0,
+    "profile_photo": 0,
+    "id": 1,
+    "id_proof": 1,
+    "certificate": 2,
+    "arrival_selfie": 3,
+}
 
 
 def decode_document_payload(file_data: str) -> bytes:

@@ -9,6 +9,7 @@ from app.models.booking import Booking
 from app.models.caregiver import Caregiver
 from app.models.user import User
 from app.models.location import Location
+from app.models.review import Review
 from app.services.auth_service import decode_access_token
 from app.services.document_service import serialize_document, sort_documents
 from app.services.websocket_manager import manager
@@ -57,10 +58,13 @@ def serialize_public_caregiver(caregiver: Caregiver | None, caregiver_user: User
         "full_name": caregiver.full_name,
         "phone": caregiver.phone,
         "email": caregiver_user.email if caregiver_user else None,
+        "gender": caregiver.gender,
         "experience": caregiver.experience,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "rating": caregiver.rating,
         "is_verified": caregiver.is_verified,
+        "latitude": caregiver.latitude,
+        "longitude": caregiver.longitude,
         "documents": documents,
     }
 
@@ -115,6 +119,7 @@ def get_tracking_details(
         if booking.caregiver_id
         else None
     )
+    review = db.query(Review).filter(Review.booking_id == booking.id).first()
 
     return {
         "booking": {
@@ -125,13 +130,30 @@ def get_tracking_details(
             "payment_collected_method": booking.payment_collected_method,
             "otp": booking.otp,
             "otp_verified": booking.otp_verified,
+            "face_verified": booking.face_verified,
+            "face_verification_status": booking.face_verification_status,
+            "manual_override": booking.manual_override,
             "qr_code_path": booking.qr_code_path,
             "service_type": booking.service_type,
+            "preferred_gender": booking.preferred_gender,
+            "assigned_distance_km": booking.assigned_distance_km,
+            "assignment_reason": booking.assignment_reason,
             "patient_name": booking.patient_name,
             "patient_age": booking.patient_age,
             "start_time": booking.start_time.isoformat() if booking.start_time else None,
             "end_time": booking.end_time.isoformat() if booking.end_time else None,
             "amount": booking.amount,
+            "has_review": review is not None,
+            "review": (
+                {
+                    "id": review.id,
+                    "rating": review.rating,
+                    "comment": review.comment,
+                    "created_at": review.created_at.isoformat() if review.created_at else None,
+                }
+                if review
+                else None
+            ),
             "caregiver": serialize_public_caregiver(caregiver, caregiver_user),
         },
         "latest_location": (

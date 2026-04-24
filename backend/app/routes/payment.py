@@ -235,11 +235,17 @@ def verify_payment(
             {
                 "name": caregiver.full_name,
                 "phone": caregiver.phone,
+                "gender": caregiver.gender,
+                "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
                 "experience": caregiver.experience,
+                "rating": caregiver.rating,
+                "distance_km": booking.assigned_distance_km,
+                "is_verified": caregiver.is_verified,
             }
             if caregiver
             else None
         ),
+        "assignment_reason": booking.assignment_reason,
     }
 
 

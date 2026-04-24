@@ -32,6 +32,10 @@ export interface BookingSummary {
   start_time?: string | null;
   end_time?: string | null;
   otp_verified?: boolean;
+  face_verified?: boolean;
+  face_verification_status?: string | null;
+  manual_override?: boolean;
+  arrival_selfie_id?: number | null;
   qr_code_path?: string | null;
   prescription_file_name?: string | null;
   has_prescription?: boolean;

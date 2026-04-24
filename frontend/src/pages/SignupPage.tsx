@@ -31,6 +31,9 @@ export default function SignupPage() {
     password: "",
     role: "user" as "user" | "caregiver",
     location: "",
+    gender: "",
+    latitude: "",
+    longitude: "",
     experience: "",
     skills: [] as string[],
     profile_photo: null as UploadDocument | null,
@@ -86,12 +89,35 @@ export default function SignupPage() {
       password: form.password,
       role: form.role,
       location: isCaregiver ? form.location : undefined,
+      gender: isCaregiver && form.gender ? (form.gender as "male" | "female" | "other") : undefined,
+      latitude: isCaregiver && form.latitude ? Number(form.latitude) : undefined,
+      longitude: isCaregiver && form.longitude ? Number(form.longitude) : undefined,
       experience: isCaregiver ? Number(form.experience) : undefined,
       skills: isCaregiver ? form.skills : undefined,
       profile_photo: isCaregiver ? form.profile_photo ?? undefined : undefined,
       id_proof: isCaregiver ? form.id_proof ?? undefined : undefined,
       certificate: isCaregiver ? form.certificate ?? undefined : undefined,
     });
+  };
+
+  const captureCaregiverLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("Geolocation is not supported in this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setForm((current) => ({
+          ...current,
+          latitude: String(position.coords.latitude),
+          longitude: String(position.coords.longitude),
+        }));
+        toast.success("Current location captured");
+      },
+      () => toast.error("Unable to capture current location."),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
   };
 
   return (
@@ -264,6 +290,51 @@ export default function SignupPage() {
                     </div>
 
                     <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Gender</Label>
+                          <Select value={form.gender} onValueChange={(value) => setForm((current) => ({ ...current, gender: value }))}>
+                            <SelectTrigger className="h-12 rounded-2xl border-slate-200 bg-white">
+                              <SelectValue placeholder="Select gender" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="female">Female</SelectItem>
+                              <SelectItem value="male">Male</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Current location</Label>
+                          <Button type="button" variant="outline" className="h-12 w-full rounded-2xl border-slate-200 bg-white" onClick={captureCaregiverLocation}>
+                            Use My Current Location
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Latitude</Label>
+                          <Input
+                            type="number"
+                            step="any"
+                            placeholder="Optional latitude"
+                            className="h-12 rounded-2xl border-slate-200 bg-white"
+                            value={form.latitude}
+                            onChange={update("latitude")}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Longitude</Label>
+                          <Input
+                            type="number"
+                            step="any"
+                            placeholder="Optional longitude"
+                            className="h-12 rounded-2xl border-slate-200 bg-white"
+                            value={form.longitude}
+                            onChange={update("longitude")}
+                          />
+                        </div>
+                      </div>
                       <Label>Skills</Label>
                       <div className="grid gap-2.5 sm:grid-cols-2">
                         {skillOptions.map((skill) => (

@@ -22,6 +22,9 @@ const actionConfig: Record<string, Array<{ label: string; status: string; tone: 
   on_the_way: [
     { label: "Mark Arrived", status: "arrived", tone: "bg-emerald-400 text-slate-950 hover:bg-emerald-300" },
   ],
+  arrived: [
+    { label: "Start Service", status: "started", tone: "bg-violet-400 text-slate-950 hover:bg-violet-300" },
+  ],
   started: [
     { label: "Complete Job", status: "completed", tone: "bg-violet-400 text-slate-950 hover:bg-violet-300" },
   ],
@@ -54,7 +57,14 @@ export default function CaregiverJobPage() {
   const [updatingTaskId, setUpdatingTaskId] = useState<number | null>(null);
   const [enteredOtp, setEnteredOtp] = useState("");
   const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [selfieFile, setSelfieFile] = useState<File | null>(null);
+  const [selfiePreviewUrl, setSelfiePreviewUrl] = useState<string | null>(null);
+  const [verifyingFace, setVerifyingFace] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const taskRequestKeyRef = useRef<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const approvalStatus = user?.caregiver_status ?? "pending";
 
   const bookingId = id ? Number(id) : null;
@@ -71,6 +81,10 @@ export default function CaregiverJobPage() {
     bookingId,
     enabled: sharingEnabled,
   });
+  const otpVerified = Boolean(booking?.otp_verified);
+  const faceVerified = Boolean(booking?.face_verified);
+  const faceStatus = booking?.face_verification_status ?? "pending";
+  const canStartService = otpVerified && (faceVerified || booking?.manual_override || faceStatus === "manual_override");
 
   useEffect(() => {
     const syncCaregiverProfile = async () => {
@@ -168,6 +182,79 @@ export default function CaregiverJobPage() {
   }, [approvalStatus, bookingId, setCurrentBooking, setLiveLocation]);
 
   useEffect(() => {
+    if (!booking) {
+      setSelfieFile(null);
+      setCameraOpen(false);
+      return;
+    }
+
+    if (booking.otp_verified && (booking.face_verified || booking.face_verification_status === "manual_override")) {
+      setSelfieFile(null);
+      setCameraOpen(false);
+    }
+  }, [booking]);
+
+  useEffect(() => {
+    if (!selfieFile) {
+      setSelfiePreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(selfieFile);
+    setSelfiePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [selfieFile]);
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const startCamera = async () => {
+      try {
+        setCameraError(null);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => undefined);
+        }
+      } catch (err: any) {
+        setCameraError(err?.message || "Unable to access the camera.");
+        setCameraOpen(false);
+      }
+    };
+
+    void startCamera();
+
+    return () => {
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    };
+  }, [cameraOpen]);
+
+  useEffect(() => {
     if (approvalStatus !== "approved" || !activeBookingId || !booking) {
       setTasks([]);
       taskRequestKeyRef.current = null;
@@ -241,16 +328,76 @@ export default function CaregiverJobPage() {
     setError(null);
     try {
       const response = await bookingAPI.verifyOtp({ booking_id: bookingId, entered_otp: enteredOtp.trim() });
-      const nextStatus = response.data.status || "started";
-      setBooking((current) => (current ? { ...current, status: nextStatus, otp_verified: true } : current));
-      setCurrentBooking((current) => (current ? { ...current, status: nextStatus, otp_verified: true } : current));
-      toast.success("Caregiver verified");
+      setBooking((current) => (current ? { ...current, otp_verified: true, face_verified: false, face_verification_status: response.data.face_verification_status ?? "pending", manual_override: false } : current));
+      setCurrentBooking((current) => (current ? { ...current, otp_verified: true, face_verified: false, face_verification_status: response.data.face_verification_status ?? "pending", manual_override: false } : current));
+      toast.success("OTP verified");
     } catch (err: any) {
       toast.error(err.response?.data?.detail || "OTP verification failed.");
       setError(err.response?.data?.detail || "OTP verification failed.");
     } finally {
       setVerifyingOtp(false);
     }
+  };
+
+  const verifyFace = async () => {
+    if (!bookingId || !selfieFile) {
+      toast.error("Capture or upload the arrival selfie first.");
+      return;
+    }
+
+    setVerifyingFace(true);
+    setError(null);
+    try {
+      const response = await bookingAPI.verifyFace(bookingId, selfieFile);
+      const nextState = {
+        face_verified: response.data.verified,
+        face_verification_status: response.data.face_verification_status,
+        manual_override: response.data.face_verification_status === "manual_override",
+      };
+      setBooking((current) => (current ? { ...current, ...nextState } : current));
+      setCurrentBooking((current) => (current ? { ...current, ...nextState } : current));
+      if (response.data.verified) {
+        toast.success("Face verified");
+      } else {
+        toast.error("Face verification failed — waiting for admin review");
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Face verification failed.");
+      setError(err.response?.data?.detail || "Face verification failed.");
+    } finally {
+      setVerifyingFace(false);
+    }
+  };
+
+  const captureSelfie = async () => {
+    const video = videoRef.current;
+    if (!video) {
+      toast.error("Camera preview is not ready yet.");
+      return;
+    }
+
+    const width = video.videoWidth || 720;
+    const height = video.videoHeight || 540;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      toast.error("Unable to capture selfie.");
+      return;
+    }
+
+    context.drawImage(video, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (!blob) {
+      toast.error("Unable to capture selfie.");
+      return;
+    }
+
+    const file = new File([blob], `arrival-selfie-${bookingId ?? "booking"}.jpg`, { type: "image/jpeg" });
+    setSelfieFile(file);
+    setCameraOpen(false);
+    toast.success("Arrival selfie captured");
   };
 
   const openPrescription = async () => {
@@ -436,33 +583,130 @@ export default function CaregiverJobPage() {
                     <div className="mb-5 flex items-center gap-3">
                       <ShieldAlert className="h-5 w-5 text-amber-300" />
                       <div>
-                        <h2 className="text-xl font-semibold text-white">OTP verification</h2>
-                        <p className="text-sm text-slate-400">Verify the patient handoff before care starts.</p>
+                        <h2 className="text-xl font-semibold text-white">Arrival verification</h2>
+                        <p className="text-sm text-slate-400">OTP and face verification must pass before care starts.</p>
                       </div>
                     </div>
-                    {booking.status === "arrived" && !booking.otp_verified ? (
+                    {booking.status === "arrived" || booking.status === "started" || booking.status === "completed" ? (
                       <div className="space-y-4">
-                        <Input
-                          value={enteredOtp}
-                          onChange={(event) => setEnteredOtp(event.target.value.replace(/\D/g, "").slice(0, 4))}
-                          placeholder="Enter OTP"
-                          className="h-12 rounded-2xl border-white/10 bg-slate-950/60 text-white"
-                          inputMode="numeric"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void verifyOtp()}
-                          disabled={verifyingOtp}
-                          className="rounded-2xl bg-violet-400 px-4 py-4 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {verifyingOtp ? "Verifying..." : "Verify OTP"}
-                        </button>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-sm text-slate-300">
+                            <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">OTP verification</p>
+                            <p className="mt-2 font-semibold text-white">{otpVerified ? "OTP Verified ✅" : "Pending"}</p>
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-sm text-slate-300">
+                            <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Face verification</p>
+                            <p className="mt-2 font-semibold text-white">
+                              {faceStatus === "manual_override"
+                                ? "Manual override approved ✅"
+                                : faceVerified
+                                  ? "Face Verified ✅"
+                                  : faceStatus === "failed"
+                                    ? "Face verification failed — waiting for admin review"
+                                    : "Pending"}
+                            </p>
+                          </div>
+                        </div>
+                        {!otpVerified ? (
+                          <div className="space-y-4">
+                            <Input
+                              value={enteredOtp}
+                              onChange={(event) => setEnteredOtp(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                              placeholder="Enter OTP"
+                              className="h-12 rounded-2xl border-white/10 bg-slate-950/60 text-white"
+                              inputMode="numeric"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void verifyOtp()}
+                              disabled={verifyingOtp}
+                              className="rounded-2xl bg-violet-400 px-4 py-4 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {verifyingOtp ? "Verifying..." : "Verify OTP"}
+                            </button>
+                          </div>
+                        ) : !faceVerified && faceStatus !== "manual_override" ? (
+                          <div className="space-y-4">
+                            <div className="flex flex-wrap gap-3">
+                              <button
+                                type="button"
+                                onClick={() => setCameraOpen(true)}
+                                className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
+                              >
+                                Open camera
+                              </button>
+                              <label className="cursor-pointer rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:bg-white/5">
+                                Upload selfie
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  capture="user"
+                                  onChange={(event) => setSelfieFile(event.target.files?.[0] || null)}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
+                            {cameraError ? (
+                              <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-100">
+                                {cameraError}
+                              </div>
+                            ) : null}
+                            {cameraOpen ? (
+                              <div className="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                                <video ref={videoRef} autoPlay playsInline muted className="h-72 w-full rounded-2xl bg-black object-cover" />
+                                <div className="flex flex-wrap gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => void captureSelfie()}
+                                    className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300"
+                                  >
+                                    Capture selfie
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCameraOpen(false)}
+                                    className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:bg-white/5"
+                                  >
+                                    Close camera
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                            {selfieFile ? (
+                              <div className="space-y-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+                                <p>Selected selfie: {selfieFile.name}</p>
+                                {selfiePreviewUrl ? (
+                                  <img src={selfiePreviewUrl} alt="Selected arrival selfie preview" className="h-52 w-full rounded-2xl object-cover" />
+                                ) : null}
+                                <div className="flex flex-wrap gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelfieFile(null)}
+                                    className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/5"
+                                  >
+                                    Remove selfie
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => void verifyFace()}
+                              disabled={verifyingFace || !selfieFile}
+                              className="rounded-2xl bg-cyan-400 px-4 py-4 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {verifyingFace ? "Verifying face..." : "Verify Face"}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+                            Service start is unlocked. You can begin care when ready.
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4 text-sm text-slate-300">
-                        {booking.otp_verified
-                          ? "OTP verified. Service has started and the job can continue normally."
-                          : "OTP verification becomes available after you mark the job as arrived."}
+                        Arrival verification becomes available after you mark the job as arrived.
                       </div>
                     )}
                   </div>
@@ -481,11 +725,11 @@ export default function CaregiverJobPage() {
                           <button
                             key={button.label}
                             type="button"
-                            disabled={Boolean(updatingStatus)}
+                            disabled={Boolean(updatingStatus) || (button.status === "started" && !canStartService)}
                             onClick={() => void updateStatus(button.status)}
                             className={`rounded-2xl px-4 py-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.tone}`}
                           >
-                            {updatingStatus === button.status ? "Updating..." : button.label}
+                            {updatingStatus === button.status ? "Updating..." : button.status === "started" && !canStartService ? "Complete OTP + face verification first" : button.label}
                           </button>
                         ))}
                       </div>

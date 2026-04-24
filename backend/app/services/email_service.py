@@ -1,15 +1,17 @@
 import logging
 import os
-import smtplib
+import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
+from urllib import error, request
 
 
 logger = logging.getLogger(__name__)
 
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASSWORD")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "ApnaCare <onboarding@resend.dev>")
+RESEND_API_URL = "https://api.resend.com/emails"
 
 
 def _build_details_markup(details: dict[str, str] | None) -> str:
@@ -82,22 +84,46 @@ def send_email(
 ) -> tuple[bool, str | None]:
     if not to_email:
         return False, "Missing recipient email"
-    if not EMAIL_USER or not EMAIL_PASS:
-        return False, "Email credentials are not configured"
+    if not RESEND_API_KEY:
+        return False, "Resend API key is not configured"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
+    msg["From"] = RESEND_FROM_EMAIL
     msg["To"] = to_email
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-    msg.attach(MIMEText(_build_html_email(recipient_name=recipient_name, title=subject, body=body, details=details), "html", "utf-8"))
+    html_body = _build_html_email(recipient_name=recipient_name, title=subject, body=body, details=details)
+    plain_body = body
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    payload = json.dumps(
+        {
+            "from": RESEND_FROM_EMAIL,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+            "text": plain_body,
+        }
+    ).encode("utf-8")
+    req = request.Request(
+        RESEND_API_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "apnacare-backend/1.0",
+        },
+        method="POST",
+    )
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASS)
-            server.send_message(msg)
+        with request.urlopen(req, timeout=30) as response:
+            response.read()
         return True, None
+    except error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        logger.exception("Resend rejected email to %s", to_email)
+        return False, f"Resend HTTP {exc.code}: {error_body}"
     except Exception as exc:
         logger.exception("Failed to send email to %s", to_email)
         return False, str(exc)

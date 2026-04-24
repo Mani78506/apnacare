@@ -9,6 +9,11 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  if (typeof FormData !== "undefined" && config.data instanceof FormData && config.headers) {
+    delete (config.headers as Record<string, string | undefined>)["Content-Type"];
+    delete (config.headers as Record<string, string | undefined>)["content-type"];
+  }
+
   const existingAuthorization =
     (config.headers as Record<string, string | undefined> | undefined)?.Authorization ??
     (config.headers as Record<string, string | undefined> | undefined)?.authorization;
@@ -19,7 +24,7 @@ api.interceptors.request.use((config) => {
 
   const requestUrl = `${config.baseURL ?? ""}${config.url ?? ""}`;
   const isAdminRequest = /\/admin(\/|$)/.test(requestUrl);
-  const isCaregiverRequest = /\/caregiver(\/|$)|\/booking\/verify-otp(\/|$)|\/booking\/latest(\/|$)/.test(requestUrl);
+  const isCaregiverRequest = /\/caregiver(\/|$)|\/booking\/verify-otp(\/|$)|\/booking\/face-verify(\/|$)|\/booking\/latest(\/|$)/.test(requestUrl);
   const token = isAdminRequest ? getAdminToken() : isCaregiverRequest ? getCaregiverToken() : getUserToken();
 
   if (!token) {
@@ -55,10 +60,14 @@ export interface PublicCaregiverProfile {
   full_name: string | null;
   phone?: string | null;
   email?: string | null;
+  gender?: string | null;
   experience?: number | null;
   skills: string[];
   rating?: number | null;
   is_verified: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
+  distance_km?: number | null;
   documents: CaregiverDocumentSummary[];
 }
 
@@ -70,6 +79,11 @@ export interface BookingSummary {
   patient_name?: string | null;
   patient_age?: number | null;
   patient_condition?: string | null;
+  preferred_gender?: string | null;
+  user_latitude?: number | null;
+  user_longitude?: number | null;
+  assigned_distance_km?: number | null;
+  assignment_reason?: string | null;
   service_type?: string | null;
   notes?: string | null;
   duration_type?: string | null;
@@ -80,6 +94,10 @@ export interface BookingSummary {
   payment_method?: "online" | "cash_on_delivery" | null;
   otp?: string | null;
   otp_verified?: boolean;
+  face_verified?: boolean;
+  face_verification_status?: string | null;
+  manual_override?: boolean;
+  arrival_selfie_id?: number | null;
   qr_code_path?: string | null;
   payment_status?: string | null;
   payment_collected_method?: string | null;
@@ -100,6 +118,7 @@ export interface CaregiverProfileSummary {
   phone: string | null;
   email?: string | null;
   location: string | null;
+  gender?: "male" | "female" | "other" | null;
   skills: string[];
   experience: number | null;
   status: "pending" | "approved" | "rejected";
@@ -111,6 +130,8 @@ export interface CaregiverProfileSummary {
   document_uploaded: boolean;
   documents?: CaregiverDocumentSummary[];
   rating?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface CaregiverDocumentSummary {
@@ -141,10 +162,12 @@ export interface AdminBookingPerson {
 }
 
 export interface AdminBookingCaregiver extends AdminBookingPerson {
+  gender?: string | null;
   status?: string | null;
   is_available?: boolean | null;
   is_enabled?: boolean | null;
   forced_offline?: boolean | null;
+  rating?: number | null;
   latest_location?: { lat: number; lng: number } | null;
 }
 
@@ -157,6 +180,9 @@ export interface AdminBookingRecord {
   notes?: string | null;
   start_time?: string | null;
   end_time?: string | null;
+  preferred_gender?: string | null;
+  assigned_distance_km?: number | null;
+  assignment_reason?: string | null;
   patient: AdminBookingPerson;
   caregiver: AdminBookingCaregiver;
   cancel_reason?: string | null;
@@ -164,6 +190,37 @@ export interface AdminBookingRecord {
   admin_notes?: string | null;
   reassigned_from_caregiver_id?: number | null;
   live_location?: { lat: number; lng: number; timestamp?: string | null } | null;
+  otp_verified?: boolean;
+  face_verified?: boolean;
+  face_verification_status?: string | null;
+  manual_override?: boolean;
+  arrival_selfie_id?: number | null;
+}
+
+export interface BookingOtpVerificationResponse {
+  message: string;
+  booking_id: number;
+  otp_verified: boolean;
+  next_step: string;
+  face_verification_status?: string | null;
+}
+
+export interface FaceVerificationResponse {
+  verified: boolean;
+  face_verification_status: string;
+  distance?: number | null;
+  threshold?: number | null;
+  message: string;
+}
+
+export interface AdminFaceReviewRecord {
+  booking_id: number;
+  caregiver_id: number | null;
+  otp_verified: boolean;
+  face_verified: boolean;
+  face_verification_status: string;
+  profile_photo_document_id?: number | null;
+  arrival_selfie_document_id?: number | null;
 }
 
 export interface AdminCaregiverStats {
@@ -225,12 +282,19 @@ export interface PaymentVerificationResponse {
   status: string;
   booking_status?: string;
   caregiver?: {
+    id?: number | null;
     name?: string | null;
     phone?: string | null;
+    gender?: string | null;
+    skills?: string[];
     experience?: number | null;
+    rating?: number | null;
+    distance_km?: number | null;
+    is_verified?: boolean;
   } | null;
   caregiver_amount?: number;
   platform_fee?: number;
+  assignment_reason?: string | null;
 }
 
 export interface PaymentStatusResponse {
@@ -302,6 +366,9 @@ export const authAPI = {
     password: string;
     role?: "user" | "caregiver";
     location?: string;
+    gender?: "male" | "female" | "other";
+    latitude?: number;
+    longitude?: number;
     skills?: string[];
     experience?: number;
     profile_photo?: { file_name: string; content_type?: string; file_data: string };
@@ -321,6 +388,9 @@ export const bookingAPI = {
     service_type?: string;
     notes?: string;
     patient_condition?: string;
+    preferred_gender?: "any" | "male" | "female";
+    user_latitude?: number;
+    user_longitude?: number;
     duration_type?: string;
     hours?: number;
     days?: number;
@@ -346,9 +416,16 @@ export const bookingAPI = {
   getLatest: () => api.get<{ booking: BookingSummary | null }>("/booking/latest", { headers: withBearer(getCaregiverToken()) }),
   getMine: () => api.get<{ bookings: BookingSummary[] }>("/booking/mine", { headers: withBearer(getUserToken()) }),
   verifyOtp: (payload: { booking_id: number; entered_otp: string }) =>
-    api.post<{ message: string; booking_id: number; status: string }>("/booking/verify-otp", payload, {
+    api.post<BookingOtpVerificationResponse>("/booking/verify-otp", payload, {
       headers: withBearer(getCaregiverToken()),
     }),
+  verifyFace: (bookingId: number, selfieFile: File) => {
+    const formData = new FormData();
+    formData.append("selfie", selfieFile);
+    return api.post<FaceVerificationResponse>(`/booking/face-verify/${bookingId}`, formData, {
+      headers: withBearer(getCaregiverToken()),
+    });
+  },
   downloadPrescription: (bookingId: number, role: "user" | "caregiver" | "admin" = "user") => {
     const token = role === "admin" ? getAdminToken() : role === "caregiver" ? getCaregiverToken() : getUserToken();
     return api.get<Blob>(`/booking/${bookingId}/prescription`, {
@@ -372,13 +449,21 @@ export const trackingAPI = {
         payment_collected_method?: string | null;
         otp?: string | null;
         otp_verified?: boolean;
+        face_verified?: boolean;
+        face_verification_status?: string | null;
+        manual_override?: boolean;
         qr_code_path?: string | null;
         service_type?: string | null;
+        preferred_gender?: string | null;
+        assigned_distance_km?: number | null;
+        assignment_reason?: string | null;
         patient_name?: string | null;
         patient_age?: number | null;
         start_time?: string | null;
         end_time?: string | null;
         amount?: number | null;
+        has_review?: boolean;
+        review?: BookingReview | null;
         caregiver?: PublicCaregiverProfile | null;
       };
       latest_location?: { lat: number; lng: number; timestamp?: string | null } | null;
@@ -391,7 +476,7 @@ export const caregiverAPI = {
     api.post("/caregiver/update-location", payload, { headers: withBearer(getCaregiverToken()) }),
   updateStatus: (payload: { booking_id: number; status: string }) =>
     api.post("/caregiver/update-status", payload, { headers: withBearer(getCaregiverToken()) }),
-  updateAvailability: (payload: { caregiver_id?: number; is_available: boolean }) =>
+  updateAvailability: (payload: { caregiver_id?: number; is_available: boolean; latitude?: number; longitude?: number }) =>
     api.post<{ message: string; caregiver?: CaregiverProfileSummary }>("/caregiver/toggle-availability", payload, {
       headers: withBearer(getCaregiverToken()),
     }),
@@ -452,6 +537,10 @@ export const adminAPI = {
   getReviews: () => api.get<{ reviews: AdminReviewRecord[] }>("/admin/reviews", { headers: withBearer(getAdminToken()) }),
   getNotifications: () =>
     api.get<{ notifications: AppNotification[] }>("/admin/notifications", { headers: withBearer(getAdminToken()) }),
+  getFaceReview: (bookingId: number) =>
+    api.get<AdminFaceReviewRecord>(`/admin/booking/${bookingId}/face-review`, { headers: withBearer(getAdminToken()) }),
+  approveFaceOverride: (bookingId: number) =>
+    api.post<{ message: string; booking_id: number }>(`/admin/booking/${bookingId}/face-override`, {}, { headers: withBearer(getAdminToken()) }),
 };
 
 export const paymentAPI = {

@@ -253,12 +253,28 @@ export default function HomePage() {
                   {activeBooking.caregiver ? (
                     <div className="mt-6 rounded-[28px] border border-white/80 bg-white/85 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.04)]">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">Assigned caregiver</p>
-                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                         <InfoPanel icon={UserRound} label="Name" value={activeBooking.caregiver.full_name || "Not available"} />
                         <InfoPanel
                           icon={Shield}
                           label="Verification"
                           value={activeBooking.caregiver.is_verified ? "Verified caregiver" : "Verification pending"}
+                        />
+                        <InfoPanel
+                          icon={Shield}
+                          label="OTP verification"
+                          value={activeBooking.otp_verified ? "Verified" : "Pending"}
+                        />
+                        <InfoPanel
+                          icon={Shield}
+                          label="Face verification"
+                          value={
+                            activeBooking.manual_override
+                              ? "Manual override approved"
+                              : activeBooking.face_verified
+                                ? "Matched"
+                                : (activeBooking.face_verification_status || "pending").replaceAll("_", " ")
+                          }
                         />
                         <InfoPanel
                           icon={Sparkles}

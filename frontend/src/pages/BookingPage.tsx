@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CalendarDays, Clock, HeartPulse, ShieldCheck, User } from "lucide-react";
+import { CalendarDays, Clock, HeartPulse, MapPin, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import { formatLabel } from "@/lib/utils";
@@ -53,6 +53,7 @@ export default function BookingPage() {
     time: "",
     service_type: "elder_care",
     patient_condition: "",
+    preferred_gender: "any",
     duration_type: "",
     hours: "",
     days: "",
@@ -67,6 +68,11 @@ export default function BookingPage() {
     file_data: string;
   } | null>(null);
   const [prescriptionLabel, setPrescriptionLabel] = useState("");
+  const [locationState, setLocationState] = useState<{
+    status: "idle" | "captured" | "error";
+    latitude: number | null;
+    longitude: number | null;
+  }>({ status: "idle", latitude: null, longitude: null });
 
   const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -158,6 +164,9 @@ export default function BookingPage() {
         time: form.time,
         service_type: form.service_type,
         patient_condition: form.patient_condition,
+        preferred_gender: form.preferred_gender as "any" | "male" | "female",
+        user_latitude: locationState.latitude ?? undefined,
+        user_longitude: locationState.longitude ?? undefined,
         duration_type: form.duration_type,
         hours: form.duration_type === "hourly" ? Number(form.hours) : undefined,
         days: form.duration_type === "daily" ? Number(form.days) : undefined,
@@ -220,6 +229,30 @@ export default function BookingPage() {
     };
     reader.onerror = () => toast.error("Unable to read the prescription file.");
     reader.readAsDataURL(file);
+  };
+
+  const captureUserLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationState({ status: "error", latitude: null, longitude: null });
+      toast.error("Geolocation is not supported in this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocationState({
+          status: "captured",
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        toast.success("Location captured");
+      },
+      () => {
+        setLocationState({ status: "error", latitude: null, longitude: null });
+        toast.error("Unable to capture your location.");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
   };
 
   const handlePayment = async () => {
@@ -366,6 +399,39 @@ export default function BookingPage() {
                       {conditionOptions.find((option) => option.value === form.patient_condition)?.description ?? "Helps match the right caregiver profile."}
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label>Preferred Caregiver Gender</Label>
+                    <Select value={form.preferred_gender} onValueChange={(value) => setForm((f) => ({ ...f, preferred_gender: value }))}>
+                      <SelectTrigger className="h-12 rounded-2xl border-slate-200">
+                        <SelectValue placeholder="Choose a preference" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="any">Any</SelectItem>
+                        <SelectItem value="female">Female</SelectItem>
+                        <SelectItem value="male">Male</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-slate-500">Used as a matching preference when caregivers are available.</p>
+                  </div>
+                </div>
+                <div className="space-y-3 rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <Label className="text-sm font-semibold text-slate-950">Patient location</Label>
+                      <p className="mt-1 text-xs text-slate-500">Location helps ApnaCare prefer the nearest approved caregiver.</p>
+                    </div>
+                    <Button type="button" variant="outline" className="h-10 rounded-2xl border-slate-200 bg-white" onClick={captureUserLocation}>
+                      <MapPin className="h-4 w-4" />
+                      Use My Location
+                    </Button>
+                  </div>
+                  <p className="text-sm text-slate-700">
+                    {locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
+                      ? `Location captured (${locationState.latitude.toFixed(4)}, ${locationState.longitude.toFixed(4)})`
+                      : "Location not provided"}
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Service Duration</Label>
                     <Select value={form.duration_type} onValueChange={handleDurationChange}>

@@ -34,4 +34,8 @@ def generate_booking_qr_code(booking: Booking) -> str | None:
 def refresh_booking_security_artifacts(booking: Booking) -> None:
     booking.otp = generate_booking_otp()
     booking.otp_verified = False
+    booking.face_verified = False
+    booking.face_verification_status = "pending"
+    booking.arrival_selfie_id = None
+    booking.manual_override = False
     booking.qr_code_path = generate_booking_qr_code(booking)

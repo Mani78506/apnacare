@@ -7,6 +7,7 @@ from app.models.caregiver import Caregiver
 from app.models.document import Document
 from app.models.user import User
 from app.schemas.caregiver import CaregiverProfileRegistration
+from app.services.assignment_service import validate_caregiver_gender, validate_coordinates
 from app.services.auth_service import create_access_token, decode_access_token, hash_password
 from app.services.document_service import (
     extract_registration_documents,
@@ -67,6 +68,7 @@ def serialize_caregiver(caregiver: Caregiver, email: str | None = None):
         "phone": caregiver.phone,
         "email": email,
         "location": caregiver.location,
+        "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
         "status": caregiver.status,
@@ -77,6 +79,9 @@ def serialize_caregiver(caregiver: Caregiver, email: str | None = None):
         "document_name": primary_document.file_name if primary_document else caregiver.document_name,
         "document_uploaded": bool(documents) or bool(caregiver.document_data),
         "documents": [serialize_document(document) for document in documents],
+        "latitude": caregiver.latitude,
+        "longitude": caregiver.longitude,
+        "rating": caregiver.rating,
     }
 
 
@@ -92,6 +97,14 @@ def register_caregiver(payload: CaregiverProfileRegistration, db: Session = Depe
             status_code=422,
             detail="Caregiver registration requires profile photo, ID proof, and certificate documents. Legacy clients must upload at least one ID proof document.",
         )
+
+    caregiver_gender = validate_caregiver_gender(payload.gender)
+    caregiver_latitude, caregiver_longitude = validate_coordinates(
+        payload.latitude,
+        payload.longitude,
+        latitude_label="latitude",
+        longitude_label="longitude",
+    )
 
     user = User(
         name=payload.name,
@@ -109,6 +122,7 @@ def register_caregiver(payload: CaregiverProfileRegistration, db: Session = Depe
         full_name=payload.name,
         phone=payload.phone,
         location=payload.location,
+        gender=caregiver_gender,
         skills=", ".join(payload.skills),
         experience=payload.experience,
         status="pending",
@@ -119,8 +133,8 @@ def register_caregiver(payload: CaregiverProfileRegistration, db: Session = Depe
         document_name=registration_documents[0]["file_name"] if registration_documents else payload.document_name,
         document_content_type=registration_documents[0]["content_type"] if registration_documents else payload.document_content_type,
         document_data=payload.document_data if not registration_documents else None,
-        latitude=17.3850,
-        longitude=78.4867,
+        latitude=caregiver_latitude,
+        longitude=caregiver_longitude,
         rating=0,
     )
     db.add(caregiver)

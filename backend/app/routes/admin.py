@@ -7,12 +7,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.booking import Booking
 from app.models.caregiver import Caregiver
+from app.models.document import Document
 from app.models.location import Location
 from app.models.notification import Notification
 from app.models.payment_transaction import PaymentTransaction
 from app.models.review import Review
 from app.models.user import User
 from app.schemas.admin import BookingCancelRequest, BookingReassignRequest
+from app.services.assignment_service import assign_best_caregiver, calculate_distance_km
 from app.services.auth_service import decode_access_token
 from app.services.booking_security_service import refresh_booking_security_artifacts
 from app.services.document_service import get_primary_document, serialize_document, sort_documents
@@ -78,16 +80,26 @@ def serialize_booking(
             "name": caregiver.full_name if caregiver else None,
             "email": caregiver_user.email if caregiver_user else None,
             "phone": caregiver.phone if caregiver else None,
+            "gender": caregiver.gender if caregiver else None,
             "status": caregiver.status if caregiver else None,
             "is_available": caregiver.is_available if caregiver else None,
             "is_enabled": caregiver.is_enabled if caregiver else None,
             "forced_offline": caregiver.forced_offline if caregiver else None,
+            "rating": caregiver.rating if caregiver else None,
             "latest_location": latest_location,
         },
+        "preferred_gender": booking.preferred_gender,
+        "assigned_distance_km": booking.assigned_distance_km,
+        "assignment_reason": booking.assignment_reason,
         "cancel_reason": booking.cancel_reason,
         "cancelled_by": booking.cancelled_by,
         "admin_notes": booking.admin_notes,
         "reassigned_from_caregiver_id": booking.reassigned_from_caregiver_id,
+        "otp_verified": booking.otp_verified,
+        "face_verified": booking.face_verified,
+        "face_verification_status": booking.face_verification_status,
+        "manual_override": booking.manual_override,
+        "arrival_selfie_id": booking.arrival_selfie_id,
     }
 
 
@@ -118,6 +130,7 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None, stats: dict | N
         "email": user.email if user else None,
         "phone": caregiver.phone,
         "location": caregiver.location,
+        "gender": caregiver.gender,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
         "experience": caregiver.experience,
         "status": caregiver.status,
@@ -129,6 +142,8 @@ def serialize_caregiver(caregiver: Caregiver, user: User | None, stats: dict | N
         "document_uploaded": bool(documents) or bool(caregiver.document_data),
         "documents": [serialize_document(document) for document in documents],
         "rating": caregiver.rating,
+        "latitude": caregiver.latitude,
+        "longitude": caregiver.longitude,
         "stats": stats,
     }
 
@@ -254,6 +269,12 @@ def reassign_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
+    previous_caregiver_id = booking.caregiver_id
+    previous_caregiver = db.query(Caregiver).filter(Caregiver.id == previous_caregiver_id).first() if previous_caregiver_id else None
+    if previous_caregiver:
+        previous_caregiver.is_available = previous_caregiver.is_enabled and not previous_caregiver.forced_offline
+    booking.reassigned_from_caregiver_id = previous_caregiver_id
+
     next_caregiver = None
     if payload.caregiver_id is not None:
         next_caregiver = db.query(Caregiver).filter(Caregiver.id == payload.caregiver_id).first()
@@ -262,30 +283,31 @@ def reassign_booking(
         if next_caregiver.status != "approved" or not next_caregiver.is_enabled or next_caregiver.forced_offline:
             raise HTTPException(status_code=400, detail="Target caregiver is not available for reassignment")
     else:
-        next_caregiver = (
-            db.query(Caregiver)
-            .filter(
-                Caregiver.status == "approved",
-                Caregiver.is_available == True,
-                Caregiver.is_enabled == True,
-                Caregiver.forced_offline == False,
-                Caregiver.id != booking.caregiver_id,
-            )
-            .order_by(Caregiver.rating.desc(), Caregiver.id.asc())
-            .first()
+        next_caregiver = assign_best_caregiver(
+            db,
+            booking,
+            excluded_caregiver_ids={booking.caregiver_id} if booking.caregiver_id else None,
         )
         if not next_caregiver:
             raise HTTPException(status_code=404, detail="No alternate caregiver available")
 
-    previous_caregiver = db.query(Caregiver).filter(Caregiver.id == booking.caregiver_id).first()
-    if previous_caregiver:
-        previous_caregiver.is_available = previous_caregiver.is_enabled and not previous_caregiver.forced_offline
-
-    booking.reassigned_from_caregiver_id = booking.caregiver_id
-    booking.caregiver_id = next_caregiver.id
-    booking.status = "assigned"
-    refresh_booking_security_artifacts(booking)
-    next_caregiver.is_available = False
+    if payload.caregiver_id is not None:
+        booking.caregiver_id = next_caregiver.id
+        booking.status = "assigned"
+        booking.assigned_distance_km = (
+            round(
+                calculate_distance_km(booking.user_latitude, booking.user_longitude, next_caregiver.latitude, next_caregiver.longitude),
+                2,
+            )
+            if booking.user_latitude is not None
+            and booking.user_longitude is not None
+            and next_caregiver.latitude is not None
+            and next_caregiver.longitude is not None
+            else None
+        )
+        booking.assignment_reason = "Assigned by admin manual reassignment."
+        refresh_booking_security_artifacts(booking)
+        next_caregiver.is_available = False
 
     patient = db.query(User).filter(User.id == booking.user_id).first()
     next_caregiver_user = db.query(User).filter(User.id == next_caregiver.user_id).first()
@@ -365,6 +387,59 @@ def cancel_booking(
         "message": "Booking cancelled",
         "booking": serialize_booking(booking, patient, caregiver, caregiver_user),
         "cancelled_by_admin_id": admin_payload["user_id"],
+    }
+
+
+@router.get("/booking/{booking_id}/face-review")
+def get_face_review(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    _: dict = Depends(get_current_admin),
+):
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    profile_photo = (
+        db.query(Document)
+        .filter(
+            Document.caregiver_id == booking.caregiver_id,
+            Document.document_type.in_(["profile_photo", "profile"]),
+        )
+        .order_by(Document.id.asc())
+        .first()
+        if booking.caregiver_id
+        else None
+    )
+
+    return {
+        "booking_id": booking.id,
+        "caregiver_id": booking.caregiver_id,
+        "otp_verified": booking.otp_verified,
+        "face_verified": booking.face_verified,
+        "face_verification_status": booking.face_verification_status,
+        "profile_photo_document_id": profile_photo.id if profile_photo else None,
+        "arrival_selfie_document_id": booking.arrival_selfie_id,
+    }
+
+
+@router.post("/booking/{booking_id}/face-override")
+def approve_face_override(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    _: dict = Depends(get_current_admin),
+):
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    booking.manual_override = True
+    booking.face_verification_status = "manual_override"
+    db.commit()
+
+    return {
+        "message": "Manual override approved",
+        "booking_id": booking.id,
     }
 
 

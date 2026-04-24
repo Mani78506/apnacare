@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { authAPI } from "@/lib/api";
+import { setLastActivePortal } from "@/lib/session";
 import { CaregiverUser, useCaregiverStore } from "@/store/useCaregiverStore";
 
 export function useCaregiverAuth() {
@@ -29,6 +30,7 @@ export function useCaregiverAuth() {
       }
 
       setSession(response.data.token, nextUser);
+      setLastActivePortal("caregiver");
       navigate("/caregiver/dashboard", { replace: true });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Unable to sign in.");

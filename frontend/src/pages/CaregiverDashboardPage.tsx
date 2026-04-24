@@ -106,7 +106,24 @@ export default function CaregiverDashboardPage() {
   const toggleAvailability = async (checked: boolean) => {
     setBusy("availability");
     try {
-      await caregiverAPI.updateAvailability({ caregiver_id: profile?.id, is_available: checked });
+      let latitude: number | undefined;
+      let longitude: number | undefined;
+
+      if (checked && navigator.geolocation) {
+        await new Promise<void>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              latitude = position.coords.latitude;
+              longitude = position.coords.longitude;
+              resolve();
+            },
+            () => resolve(),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+          );
+        });
+      }
+
+      await caregiverAPI.updateAvailability({ caregiver_id: profile?.id, is_available: checked, latitude, longitude });
       await loadDashboard(true);
     } catch (err: any) {
       setError(err.response?.data?.detail || "Unable to update availability.");
@@ -163,6 +180,10 @@ export default function CaregiverDashboardPage() {
                 <div className="flex flex-wrap items-center gap-4 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-3">
                   <div>
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Availability</p>
+                    <p className="text-sm font-semibold text-slate-950">{isAvailable ? "Online" : "Offline"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Live badge</p>
                     <p className="text-sm font-semibold text-slate-950">{isAvailable ? "Online" : "Offline"}</p>
                   </div>
                   <Switch
@@ -309,6 +330,8 @@ export default function CaregiverDashboardPage() {
                   <div className="grid gap-3 md:grid-cols-2">
                     <Mini label="Full name" value={profile?.full_name || user?.name || "Caregiver"} />
                     <Mini label="Location" value={profile?.location || "No location"} />
+                    <Mini label="Gender" value={profile?.gender ? profile.gender : "Not provided"} />
+                    <Mini label="Coordinates" value={profile?.latitude !== undefined && profile?.latitude !== null && profile?.longitude !== undefined && profile?.longitude !== null ? `${profile.latitude.toFixed(4)}, ${profile.longitude.toFixed(4)}` : "Not shared"} />
                     <Mini label="Experience" value={profile?.experience ? `${profile.experience} years` : "Not provided"} />
                     <Mini label="Verification" value={profile?.is_verified ? "Verified" : "Pending"} />
                     <Mini label="Skills" value={profile?.skills.length ? profile.skills.join(", ") : "No skills listed"} />

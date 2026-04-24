@@ -9,6 +9,7 @@ class Caregiver(Base):
     full_name = Column(String)
     phone = Column(String)
     location = Column(String)
+    gender = Column(String, nullable=True)
     experience = Column(Integer)
     skills = Column(String)
     status = Column(String, default="pending")

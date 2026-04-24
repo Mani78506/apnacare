@@ -1,5 +1,6 @@
 import os
 import base64
+from datetime import timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +18,11 @@ from app.models import review as review_model  # noqa: F401
 from app.models import user as user_model  # noqa: F401
 from app.models.caregiver import Caregiver
 from app.models.document import Document
+from app.models.booking import Booking
+from app.models.user import User
 from app.routes import admin, auth, booking, caregiver, onboarding, tracking
 from app.routes import task, payment
+from app.services.pricing_service import calculate_amount
 
 
 Base.metadata.create_all(bind=engine)
@@ -40,6 +44,16 @@ def ensure_booking_columns() -> None:
         statements.append("ALTER TABLE bookings ADD COLUMN patient_age INTEGER")
     if "patient_condition" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN patient_condition VARCHAR DEFAULT 'elderly_care'")
+    if "preferred_gender" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN preferred_gender VARCHAR DEFAULT 'any'")
+    if "user_latitude" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN user_latitude FLOAT")
+    if "user_longitude" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN user_longitude FLOAT")
+    if "assigned_distance_km" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN assigned_distance_km FLOAT")
+    if "assignment_reason" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN assignment_reason VARCHAR")
     if "service_type" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN service_type VARCHAR")
     if "notes" not in existing_columns:
@@ -76,6 +90,14 @@ def ensure_booking_columns() -> None:
         statements.append("ALTER TABLE bookings ADD COLUMN otp VARCHAR")
     if "otp_verified" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN otp_verified BOOLEAN DEFAULT FALSE")
+    if "face_verified" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN face_verified BOOLEAN DEFAULT FALSE")
+    if "face_verification_status" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN face_verification_status VARCHAR DEFAULT 'pending'")
+    if "arrival_selfie_id" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN arrival_selfie_id INTEGER")
+    if "manual_override" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN manual_override BOOLEAN DEFAULT FALSE")
     if "qr_code_path" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN qr_code_path VARCHAR")
     if "prescription_file_name" not in existing_columns:
@@ -96,6 +118,96 @@ def ensure_booking_columns() -> None:
 ensure_booking_columns()
 
 
+def backfill_booking_rows() -> None:
+    db = SessionLocal()
+    try:
+        bookings = db.query(Booking).all()
+        if not bookings:
+            return
+
+        users_by_id = {
+            user.id: user
+            for user in db.query(User).filter(User.id.in_({booking.user_id for booking in bookings if booking.user_id})).all()
+        }
+
+        changed = False
+        for booking in bookings:
+            patient_user = users_by_id.get(booking.user_id)
+
+            if not booking.patient_id or booking.patient_id <= 0:
+                booking.patient_id = booking.user_id
+                changed = True
+            if not booking.patient_name and patient_user and patient_user.name:
+                booking.patient_name = patient_user.name
+                changed = True
+            if booking.patient_condition is None:
+                booking.patient_condition = "elderly_care"
+                changed = True
+            if booking.preferred_gender is None:
+                booking.preferred_gender = "any"
+                changed = True
+            if booking.service_type is None:
+                booking.service_type = "elder_care"
+                changed = True
+            if booking.notes is None:
+                booking.notes = ""
+                changed = True
+            if booking.duration_type is None:
+                booking.duration_type = "hourly"
+                changed = True
+            if booking.payment_method is None:
+                booking.payment_method = "online"
+                changed = True
+            if booking.payment_status is None:
+                booking.payment_status = (
+                    "cod_pending" if booking.payment_method == "cash_on_delivery" else "pending"
+                )
+                changed = True
+
+            if booking.start_time and booking.end_time and booking.end_time > booking.start_time:
+                duration = booking.end_time - booking.start_time
+                if booking.duration_type == "hourly" and not booking.hours:
+                    inferred_hours = int(duration / timedelta(hours=1))
+                    if inferred_hours > 0:
+                        booking.hours = inferred_hours
+                        changed = True
+                elif booking.duration_type == "daily" and not booking.days:
+                    inferred_days = int(duration / timedelta(days=1))
+                    if inferred_days > 0:
+                        booking.days = inferred_days
+                        changed = True
+
+            if booking.duration_type == "hourly" and not booking.hours:
+                booking.hours = 1
+                changed = True
+            elif booking.duration_type == "daily" and not booking.days:
+                booking.days = 1
+                changed = True
+            elif booking.duration_type == "monthly" and not booking.months:
+                booking.months = 1
+                changed = True
+
+            if booking.amount is None or booking.amount <= 0:
+                try:
+                    booking.amount = calculate_amount(
+                        booking.duration_type or "hourly",
+                        booking.hours,
+                        booking.days,
+                        booking.months,
+                    )
+                    changed = True
+                except ValueError:
+                    pass
+
+        if changed:
+            db.commit()
+    finally:
+        db.close()
+
+
+backfill_booking_rows()
+
+
 def ensure_caregiver_columns() -> None:
     inspector = inspect(engine)
     if "caregivers" not in inspector.get_table_names():
@@ -106,12 +218,22 @@ def ensure_caregiver_columns() -> None:
 
     if "location" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN location VARCHAR")
+    if "gender" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN gender VARCHAR")
     if "full_name" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN full_name VARCHAR")
     if "phone" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN phone VARCHAR")
     if "status" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN status VARCHAR DEFAULT 'pending'")
+    if "latitude" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN latitude FLOAT")
+    if "longitude" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN longitude FLOAT")
+    if "is_available" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN is_available BOOLEAN DEFAULT FALSE")
+    if "rating" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN rating FLOAT DEFAULT 0")
     if "document_name" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN document_name VARCHAR")
     if "document_content_type" not in existing_columns:

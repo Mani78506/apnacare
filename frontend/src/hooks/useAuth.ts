@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useStore } from "@/store/useStore";
 import { authAPI } from "@/lib/api";
+import { setLastActivePortal } from "@/lib/session";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -23,6 +24,7 @@ export function useAuth() {
       }
       setToken(res.data.token);
       setUser(res.data.user);
+      setLastActivePortal("user");
       toast.success("Welcome back!");
       navigate("/home");
     } catch (err: any) {
@@ -41,6 +43,9 @@ export function useAuth() {
     password: string;
     role?: "user" | "caregiver";
     location?: string;
+    gender?: "male" | "female" | "other";
+    latitude?: number;
+    longitude?: number;
     skills?: string[];
     experience?: number;
     profile_photo?: { file_name: string; content_type?: string; file_data: string };

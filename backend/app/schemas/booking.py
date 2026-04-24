@@ -14,6 +14,9 @@ class BookingCreate(BaseModel):
     time: str
     service_type: str = "elder_care"
     patient_condition: str = "elderly_care"
+    preferred_gender: str = "any"
+    user_latitude: float | None = None
+    user_longitude: float | None = None
     notes: str = ""
     duration_type: str = "hourly"
     hours: int | None = 1

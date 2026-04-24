@@ -1,15 +1,18 @@
 from datetime import datetime
+import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile
 from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.booking import Booking
 from app.models.caregiver import Caregiver
+from app.models.document import Document
 from app.models.review import Review
 from app.models.user import User
 from app.schemas.booking import BookingCreate, BookingOtpVerify
+from app.services.assignment_service import validate_coordinates, validate_preferred_gender
 from app.schemas.review import ReviewCreate
 from app.services.auth_service import decode_access_token
 from app.services.assignment_service import reassign_booking_after_rejection
@@ -20,11 +23,13 @@ from app.services.document_service import (
     sort_documents,
 )
 from app.services.booking_fulfillment_service import finalize_booking_assignment
+from app.services.face_verification_service import verify_faces
 from app.services.notification_service import notify_user
 from app.services.pricing_service import calculate_amount, calculate_booking_end_time
 from app.services.task_service import ensure_default_tasks
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 ACTIVE_BOOKING_STATUSES = ["assigned", "accepted", "on_the_way", "arrived", "started"]
@@ -79,6 +84,11 @@ def serialize_booking(
         "patient_name": booking.patient_name or (patient_user.name if patient_user else None),
         "patient_age": booking.patient_age,
         "patient_condition": booking.patient_condition,
+        "preferred_gender": booking.preferred_gender,
+        "user_latitude": booking.user_latitude,
+        "user_longitude": booking.user_longitude,
+        "assigned_distance_km": booking.assigned_distance_km,
+        "assignment_reason": booking.assignment_reason,
         "service_type": booking.service_type,
         "notes": booking.notes,
         "duration_type": booking.duration_type,
@@ -88,6 +98,9 @@ def serialize_booking(
         "status": booking.status,
         "payment_method": booking.payment_method,
         "otp_verified": booking.otp_verified,
+        "face_verified": booking.face_verified,
+        "face_verification_status": booking.face_verification_status,
+        "manual_override": booking.manual_override,
         "payment_status": booking.payment_status,
         "payment_collected_method": booking.payment_collected_method,
         "amount": booking.amount,
@@ -103,10 +116,12 @@ def serialize_booking(
                 "full_name": caregiver.full_name,
                 "phone": caregiver.phone,
                 "email": caregiver_user.email if caregiver_user else None,
+                "gender": caregiver.gender,
                 "experience": caregiver.experience,
                 "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
                 "rating": caregiver.rating,
                 "is_verified": caregiver.is_verified,
+                "distance_km": booking.assigned_distance_km,
                 "documents": public_documents,
             }
             if caregiver
@@ -152,6 +167,14 @@ def create_booking(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    preferred_gender = validate_preferred_gender(data.preferred_gender)
+    user_latitude, user_longitude = validate_coordinates(
+        data.user_latitude,
+        data.user_longitude,
+        latitude_label="user_latitude",
+        longitude_label="user_longitude",
+    )
+
     booking = Booking(
         user_id=user_id,
         service_type=data.service_type,
@@ -167,6 +190,9 @@ def create_booking(
         patient_name=data.patient_name,
         patient_age=data.age,
         patient_condition=data.patient_condition,
+        preferred_gender=preferred_gender,
+        user_latitude=user_latitude,
+        user_longitude=user_longitude,
         start_time=start_time,
         end_time=end_time,
         status="pending",
@@ -248,6 +274,11 @@ def create_booking(
     db.refresh(booking)
 
     return {
+        "message": (
+            "Booking created but no matching caregiver available"
+            if payment_method == "cash_on_delivery" and not caregiver and booking.status == "pending"
+            else "Booking created successfully"
+        ),
         "booking_id": booking.id,
         "status": booking.status,
         "caregiver_id": caregiver.id if caregiver else None,
@@ -260,6 +291,9 @@ def create_booking(
         "days": booking.days,
         "months": booking.months,
         "amount": booking.amount,
+        "preferred_gender": booking.preferred_gender,
+        "assigned_distance_km": booking.assigned_distance_km,
+        "assignment_reason": booking.assignment_reason,
         "payment_method": booking.payment_method,
         "payment_status": booking.payment_status,
         "prescription_file_name": booking.prescription_file_name,
@@ -267,8 +301,15 @@ def create_booking(
         "scheduled_for": start_time.isoformat(),
         "caregiver": (
             {
+                "id": caregiver.id,
                 "name": caregiver.full_name,
                 "phone": caregiver.phone,
+                "gender": caregiver.gender,
+                "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
+                "experience": caregiver.experience,
+                "rating": caregiver.rating,
+                "distance_km": booking.assigned_distance_km,
+                "is_verified": caregiver.is_verified,
             }
             if caregiver
             else None
@@ -314,13 +355,14 @@ def reject_booking(
     booking_caregiver, booking_caregiver_user = get_caregiver_context(db, booking.caregiver_id)
 
     return {
-        "message": "Booking reassigned" if next_caregiver else "Booking moved back to pending",
+        "message": "Booking reassigned" if next_caregiver else "No alternate caregiver available",
         "booking_id": booking.id,
         "status": booking.status,
         "caregiver_id": booking.caregiver_id,
         "duration_type": booking.duration_type,
         "amount": booking.amount,
         "payment_status": booking.payment_status,
+        "assignment_reason": booking.assignment_reason,
         "booking": serialize_booking(
             booking,
             caregiver=booking_caregiver,
@@ -482,12 +524,20 @@ def verify_booking_otp(
     if booking.status != "arrived":
         raise HTTPException(status_code=400, detail="OTP can only be verified after arrival")
     if booking.otp_verified:
-        return {"message": "Verified successfully", "booking_id": booking.id, "status": booking.status}
+        return {
+            "message": "OTP verified successfully",
+            "booking_id": booking.id,
+            "otp_verified": True,
+            "next_step": "face_verification_required",
+            "face_verification_status": booking.face_verification_status,
+        }
     if booking.otp != data.entered_otp.strip():
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     booking.otp_verified = True
-    booking.status = "started"
+    booking.face_verified = False
+    booking.face_verification_status = "pending"
+    booking.manual_override = False
     db.commit()
     db.refresh(booking)
 
@@ -499,7 +549,7 @@ def verify_booking_otp(
             user_id=patient_user.id,
             role="user",
             title="OTP verified",
-            message=f"Booking #{booking.id} OTP has been verified. Caregiver service has started.",
+            message=f"Booking #{booking.id} OTP has been verified. Face verification is required before care can start.",
             type="otp_verified",
             email=patient_user.email,
             phone=patient_user.phone,
@@ -507,7 +557,7 @@ def verify_booking_otp(
             details={
                 "Booking ID": f"#{booking.id}",
                 "Caregiver": caregiver.full_name or caregiver_user.name if caregiver_user else "Assigned caregiver",
-                "Status": "Started",
+                "Status": "OTP verified",
             },
             email_subject="ApnaCare service started",
         )
@@ -517,7 +567,7 @@ def verify_booking_otp(
             user_id=caregiver_user.id,
             role="caregiver",
             title="OTP verified",
-            message=f"Booking #{booking.id} is verified. You can now begin service.",
+            message=f"Booking #{booking.id} OTP is verified. Complete face verification before starting service.",
             type="otp_verified",
             email=caregiver_user.email,
             phone=caregiver.phone,
@@ -525,13 +575,95 @@ def verify_booking_otp(
             details={
                 "Booking ID": f"#{booking.id}",
                 "Patient": patient_user.name if patient_user else "Patient",
-                "Status": "Started",
+                "Status": "Face verification required",
             },
             email_subject="ApnaCare OTP verified",
         )
     db.commit()
 
-    return {"message": "Verified successfully", "booking_id": booking.id, "status": booking.status}
+    return {
+        "message": "OTP verified successfully",
+        "booking_id": booking.id,
+        "otp_verified": True,
+        "next_step": "face_verification_required",
+        "face_verification_status": booking.face_verification_status,
+    }
+
+
+@router.post("/face-verify/{booking_id}")
+async def verify_booking_face(
+    booking_id: int,
+    selfie: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    payload: dict = Depends(get_current_user_payload),
+):
+    if payload.get("role") != "caregiver":
+        raise HTTPException(status_code=403, detail="Caregiver access required")
+
+    caregiver = db.query(Caregiver).filter(Caregiver.user_id == payload["user_id"]).first()
+    if not caregiver:
+        raise HTTPException(status_code=404, detail="Caregiver profile not found")
+
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id, Booking.caregiver_id == caregiver.id)
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not booking.otp_verified:
+        raise HTTPException(status_code=400, detail="OTP must be verified before face verification")
+
+    profile_photo = (
+        db.query(Document)
+        .filter(
+            Document.caregiver_id == booking.caregiver_id,
+            Document.document_type.in_(["profile_photo", "profile"]),
+        )
+        .order_by(Document.id.asc())
+        .first()
+    )
+    if not profile_photo:
+        raise HTTPException(status_code=400, detail="Caregiver profile photo not found")
+
+    selfie_bytes = await selfie.read()
+    if not selfie_bytes:
+        raise HTTPException(status_code=400, detail="Arrival selfie is required")
+
+    arrival_selfie = Document(
+        caregiver_id=booking.caregiver_id,
+        document_type="arrival_selfie",
+        file_name=selfie.filename or f"arrival-selfie-{booking.id}.jpg",
+        content_type=selfie.content_type or "application/octet-stream",
+        file_data=selfie_bytes,
+    )
+    db.add(arrival_selfie)
+    db.flush()
+
+    result = verify_faces(profile_photo.file_data, selfie_bytes)
+    logger.info(
+        "Face verify booking_id=%s caregiver_id=%s verified=%s status_before=%s",
+        booking.id,
+        booking.caregiver_id,
+        result.get("verified"),
+        booking.face_verification_status,
+    )
+    booking.arrival_selfie_id = arrival_selfie.id
+    booking.face_verified = bool(result["verified"])
+    booking.face_verification_status = "matched" if result["verified"] else "failed"
+
+    if result["verified"]:
+        booking.manual_override = False
+
+    db.commit()
+
+    return {
+        "verified": bool(result["verified"]),
+        "face_verification_status": booking.face_verification_status,
+        "distance": result.get("distance"),
+        "threshold": result.get("threshold"),
+        "message": result["message"],
+    }
 
 
 @router.post("/review")

@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { toast } from "sonner";
 import { authAPI } from "@/lib/api";
+import { setLastActivePortal } from "@/lib/session";
 import { useAdminStore } from "@/store/useAdminStore";
 
 export function useAdminAuth() {
@@ -20,6 +21,7 @@ export function useAdminAuth() {
       }
       setToken(res.data.token);
       setUser(res.data.user);
+      setLastActivePortal("admin");
       toast.success("Admin session opened.");
       navigate("/admin/dashboard", { replace: true });
     } catch (err: any) {

@@ -11,7 +11,7 @@ import {
   Waves,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ADMIN_TOKEN_KEY, CAREGIVER_TOKEN_KEY, getStoredSharedRole, SHARED_TOKEN_KEY } from "@/lib/session";
+import { getPortalSessionRoles, getPreferredPortalRole, PortalRole, setLastActivePortal } from "@/lib/session";
 
 const portals = [
   {
@@ -63,11 +63,9 @@ const operations = [
 ];
 
 export default function IndexPage() {
-  const sharedRole = getStoredSharedRole();
-  const hasUserSession = Boolean(localStorage.getItem(SHARED_TOKEN_KEY));
-  const hasAdminSession = Boolean(localStorage.getItem(ADMIN_TOKEN_KEY));
-  const hasCaregiverSession = Boolean(localStorage.getItem(CAREGIVER_TOKEN_KEY));
-  const hasPatientSession = hasUserSession && sharedRole === "user";
+  const sessionRoles = getPortalSessionRoles();
+  const preferredRole = getPreferredPortalRole();
+  const primarySession = preferredRole ? portalSessionMeta[preferredRole] : null;
   const AdminIcon = adminPortal.icon;
 
   return (
@@ -92,26 +90,13 @@ export default function IndexPage() {
                   <ShieldCheck className="h-3.5 w-3.5" />
                   Portal Selection
                 </div>
-                {hasPatientSession && (
-                  <Button asChild className="h-10 rounded-full px-4 shadow-lg">
-                    <Link to="/home">
-                      Continue patient session
-                      <ArrowRight />
-                    </Link>
-                  </Button>
-                )}
-                {hasAdminSession && (
-                  <Button asChild className="h-10 rounded-full bg-slate-950 px-4 text-white shadow-lg hover:bg-slate-800">
-                    <Link to="/admin/dashboard">
-                      Continue admin session
-                      <ArrowRight />
-                    </Link>
-                  </Button>
-                )}
-                {hasCaregiverSession && (
-                  <Button asChild variant="secondary" className="h-10 rounded-full px-4 shadow-lg">
-                    <Link to="/caregiver/dashboard">
-                      Continue caregiver session
+                {primarySession && (
+                  <Button
+                    asChild
+                    className={`h-10 rounded-full px-4 shadow-lg ${primarySession.buttonClassName}`}
+                  >
+                    <Link to={primarySession.href} onClick={() => setLastActivePortal(primarySession.role)}>
+                      {primarySession.label}
                       <ArrowRight />
                     </Link>
                   </Button>
@@ -134,6 +119,15 @@ export default function IndexPage() {
                     ApnaCare brings booking, live tracking, caregiver operations, and onboarding into a single
                     healthcare platform with clear access for every role.
                   </p>
+                  {sessionRoles.length > 1 && (
+                    <div className="mt-3 inline-flex max-w-[36rem] items-start gap-2 rounded-[18px] border border-amber-200 bg-amber-50/80 px-3.5 py-2.5 text-[0.86rem] leading-5 text-amber-900 shadow-sm">
+                      <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                      <span>
+                        Shared device detected. For cleaner separation between patient, caregiver, and admin access,
+                        use separate browser profiles or a private window for each role.
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="portal-landing__support grid gap-3 md:grid-cols-[1.04fr_0.96fr]">
@@ -238,6 +232,30 @@ export default function IndexPage() {
     </main>
   );
 }
+
+const portalSessionMeta: Record<
+  PortalRole,
+  { role: PortalRole; href: string; label: string; buttonClassName: string }
+> = {
+  user: {
+    role: "user",
+    href: "/home",
+    label: "Continue patient session",
+    buttonClassName: "",
+  },
+  admin: {
+    role: "admin",
+    href: "/admin/dashboard",
+    label: "Continue admin session",
+    buttonClassName: "bg-slate-950 text-white hover:bg-slate-800",
+  },
+  caregiver: {
+    role: "caregiver",
+    href: "/caregiver/dashboard",
+    label: "Continue caregiver session",
+    buttonClassName: "bg-emerald-500 text-white hover:bg-emerald-400",
+  },
+};
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (

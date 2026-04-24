@@ -11,3 +11,7 @@ python-jose
 geopy
 qrcode[pil]
 razorpay
+deepface
+opencv-python-headless
+numpy
+Pillow

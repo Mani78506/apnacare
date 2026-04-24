@@ -9,6 +9,7 @@ import {
   adminAPI,
   AdminBookingRecord,
   AdminCaregiverRecord,
+  AdminFaceReviewRecord,
   AdminMetricOverview,
   AdminPaymentTransaction,
   AdminReviewRecord,
@@ -31,6 +32,9 @@ const tone: Record<string, string> = {
   arrived: "border-emerald-200 bg-emerald-50 text-emerald-800",
   completed: "border-slate-200 bg-slate-100 text-slate-700",
   cancelled: "border-rose-200 bg-rose-50 text-rose-700",
+  failed: "border-rose-200 bg-rose-50 text-rose-700",
+  manual_override: "border-violet-200 bg-violet-50 text-violet-700",
+  matched: "border-emerald-200 bg-emerald-50 text-emerald-700",
 };
 
 export default function AdminDashboardPage() {
@@ -53,6 +57,7 @@ export default function AdminDashboardPage() {
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
   const [bookingQuery, setBookingQuery] = useState("");
   const [drafts, setDrafts] = useState<Record<number, { caregiverId: string; reason: string }>>({});
+  const [faceReviews, setFaceReviews] = useState<Record<number, AdminFaceReviewRecord>>({});
 
   const load = async (silent = false) => {
     silent ? setRefreshing(true) : setLoading(true);
@@ -110,6 +115,18 @@ export default function AdminDashboardPage() {
     setBusy(key);
     try { await task(); toast.success(ok); await load(true); } catch (err: any) { toast.error(err.response?.data?.detail || "Action failed."); } finally { setBusy(null); }
   };
+  const loadFaceReview = async (bookingId: number) => {
+    setBusy(`face-review-${bookingId}`);
+    try {
+      const { data } = await adminAPI.getFaceReview(bookingId);
+      setFaceReviews((current) => ({ ...current, [bookingId]: data }));
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Unable to load face review.");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const failedFaceBookings = useMemo(() => bookings.filter((item) => item.face_verification_status === "failed" || item.face_verification_status === "manual_override"), [bookings]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.18),transparent_22%),linear-gradient(180deg,#f7fbff_0%,#eef5ff_100%)]">
@@ -150,6 +167,7 @@ export default function AdminDashboardPage() {
                         <Signal label="Cancelled bookings" value={String(overview?.cancelled_bookings ?? 0)} />
                         <Signal label="Pending payments" value={String(transactions.filter((x) => x.status !== "paid").length)} />
                         <Signal label="Rejected caregivers" value={String(approvalCounts.rejected)} />
+                        <Signal label="Face review queue" value={String(failedFaceBookings.filter((x) => x.face_verification_status === "failed").length)} />
                       </div>
                     </Panel>
                     <Panel title="Admin alerts" subtitle="Latest platform updates" dark>
@@ -160,7 +178,7 @@ export default function AdminDashboardPage() {
 
                 <TabsContent value="approvals" className="space-y-4">
                   <Toolbar query={approvalQuery} setQuery={setApprovalQuery} filter={approvalFilter} setFilter={setApprovalFilter} items={["all", "pending", "approved", "rejected"]} placeholder="Search by caregiver, email, location, skills, or document" />
-                  <div className="grid gap-3">{filteredApprovals.map((x) => <div key={x.id} className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)]"><div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div className="space-y-3"><div className="flex flex-wrap items-center gap-3"><h3 className="text-xl font-semibold text-slate-950">{x.full_name || "Unnamed caregiver"}</h3><span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone[x.status]}`}>{x.status}</span></div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4"><Cell l="Email" v={x.email || "No email"} /><Cell l="Phone" v={x.phone || "No phone"} /><Cell l="Location" v={x.location || "No location"} /><Cell l="Skills" v={x.skills.length ? x.skills.join(", ") : "No skills"} /></div>{x.documents?.length ? <div className="flex flex-wrap gap-2">{x.documents.map((doc) => <a key={doc.id} href={getCaregiverDocumentUrl(doc.id)} target="_blank" rel="noreferrer" className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-800 hover:bg-cyan-100">{doc.document_type.replaceAll("_", " ")}: {doc.file_name}</a>)}</div> : <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">No uploaded caregiver documents found.</div>}</div><div className="grid gap-2 sm:min-w-[200px]"><Button className="h-10 text-sm" disabled={busy === `approve-${x.id}` || x.status === "approved"} onClick={() => void act(`approve-${x.id}`, () => adminAPI.approveCaregiver(x.id), "Caregiver approved.")}>Verify and approve</Button><Button variant="outline" className="h-10 border-rose-200 text-sm text-rose-700 hover:bg-rose-50" disabled={busy === `reject-${x.id}` || x.status === "rejected"} onClick={() => void act(`reject-${x.id}`, () => adminAPI.rejectCaregiver(x.id), "Caregiver rejected.")}>Reject application</Button></div></div></div>)}</div>
+                  <div className="grid gap-3">{filteredApprovals.map((x) => <div key={x.id} className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)]"><div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div className="space-y-3"><div className="flex flex-wrap items-center gap-3"><h3 className="text-xl font-semibold text-slate-950">{x.full_name || "Unnamed caregiver"}</h3><span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone[x.status]}`}>{x.status}</span></div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4"><Cell l="Email" v={x.email || "No email"} /><Cell l="Phone" v={x.phone || "No phone"} /><Cell l="Location" v={x.location || "No location"} /><Cell l="Skills" v={x.skills.length ? x.skills.join(", ") : "No skills"} /><Cell l="Gender" v={x.gender || "Not provided"} /><Cell l="Coordinates" v={x.latitude !== undefined && x.latitude !== null && x.longitude !== undefined && x.longitude !== null ? `${x.latitude.toFixed(4)}, ${x.longitude.toFixed(4)}` : "Not shared"} /><Cell l="Availability" v={x.is_available ? "Online" : "Offline"} /><Cell l="Rating" v={x.rating !== undefined && x.rating !== null ? `${x.rating.toFixed(1)} / 5` : "Not rated"} /></div>{x.documents?.length ? <div className="flex flex-wrap gap-2">{x.documents.map((doc) => <a key={doc.id} href={getCaregiverDocumentUrl(doc.id)} target="_blank" rel="noreferrer" className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-800 hover:bg-cyan-100">{doc.document_type.replaceAll("_", " ")}: {doc.file_name}</a>)}</div> : <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">No uploaded caregiver documents found.</div>}</div><div className="grid gap-2 sm:min-w-[200px]"><Button className="h-10 text-sm" disabled={busy === `approve-${x.id}` || x.status === "approved"} onClick={() => void act(`approve-${x.id}`, () => adminAPI.approveCaregiver(x.id), "Caregiver approved.")}>Verify and approve</Button><Button variant="outline" className="h-10 border-rose-200 text-sm text-rose-700 hover:bg-rose-50" disabled={busy === `reject-${x.id}` || x.status === "rejected"} onClick={() => void act(`reject-${x.id}`, () => adminAPI.rejectCaregiver(x.id), "Caregiver rejected.")}>Reject application</Button></div></div></div>)}</div>
                 </TabsContent>
 
                 <TabsContent value="bookings" className="space-y-4">
@@ -178,12 +196,56 @@ export default function AdminDashboardPage() {
                 </TabsContent>
 
                 <TabsContent value="caregivers" className="grid gap-3 xl:grid-cols-2">
-                  {caregivers.map((x) => <div key={x.id} className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)]"><div className="flex flex-wrap items-center gap-3"><h3 className="text-xl font-semibold text-slate-950">{x.full_name || "Unnamed caregiver"}</h3><span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone[x.status]}`}>{x.status}</span>{x.forced_offline ? <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">Forced offline</span> : null}</div><div className="mt-3 grid gap-2 md:grid-cols-2"><Cell l="Email" v={x.email || "No email"} /><Cell l="Location" v={x.location || "No location"} /><Cell l="Jobs completed" v={String(x.stats?.jobs_completed ?? 0)} /><Cell l="Average rating" v={`${x.stats?.average_rating ?? x.rating ?? 0} / 5`} /></div><div className="mt-4 flex flex-wrap gap-2"><Button className="h-10 text-sm" disabled={busy === `enable-${x.id}` || x.is_enabled} onClick={() => void act(`enable-${x.id}`, () => adminAPI.enableCaregiver(x.id), "Caregiver enabled.")}>Enable</Button><Button variant="outline" className="h-10 text-sm" disabled={busy === `disable-${x.id}` || !x.is_enabled} onClick={() => void act(`disable-${x.id}`, () => adminAPI.disableCaregiver(x.id), "Caregiver disabled.")}>Disable</Button><Button variant="outline" className="h-10 border-rose-200 text-sm text-rose-700 hover:bg-rose-50" disabled={busy === `force-${x.id}` || Boolean(x.forced_offline)} onClick={() => void act(`force-${x.id}`, () => adminAPI.forceOfflineCaregiver(x.id), "Caregiver forced offline.")}>Force offline</Button></div></div>)}
+                  {caregivers.map((x) => <div key={x.id} className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)]"><div className="flex flex-wrap items-center gap-3"><h3 className="text-xl font-semibold text-slate-950">{x.full_name || "Unnamed caregiver"}</h3><span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone[x.status]}`}>{x.status}</span>{x.forced_offline ? <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">Forced offline</span> : null}</div><div className="mt-3 grid gap-2 md:grid-cols-2"><Cell l="Email" v={x.email || "No email"} /><Cell l="Location" v={x.location || "No location"} /><Cell l="Gender" v={x.gender || "Not provided"} /><Cell l="Availability" v={x.is_available ? "Online" : "Offline"} /><Cell l="Coordinates" v={x.latitude !== undefined && x.latitude !== null && x.longitude !== undefined && x.longitude !== null ? `${x.latitude.toFixed(4)}, ${x.longitude.toFixed(4)}` : "Not shared"} /><Cell l="Jobs completed" v={String(x.stats?.jobs_completed ?? 0)} /><Cell l="Average rating" v={`${x.stats?.average_rating ?? x.rating ?? 0} / 5`} /></div><div className="mt-4 flex flex-wrap gap-2"><Button className="h-10 text-sm" disabled={busy === `enable-${x.id}` || x.is_enabled} onClick={() => void act(`enable-${x.id}`, () => adminAPI.enableCaregiver(x.id), "Caregiver enabled.")}>Enable</Button><Button variant="outline" className="h-10 text-sm" disabled={busy === `disable-${x.id}` || !x.is_enabled} onClick={() => void act(`disable-${x.id}`, () => adminAPI.disableCaregiver(x.id), "Caregiver disabled.")}>Disable</Button><Button variant="outline" className="h-10 border-rose-200 text-sm text-rose-700 hover:bg-rose-50" disabled={busy === `force-${x.id}` || Boolean(x.forced_offline)} onClick={() => void act(`force-${x.id}`, () => adminAPI.forceOfflineCaregiver(x.id), "Caregiver forced offline.")}>Force offline</Button></div></div>)}
                 </TabsContent>
 
                 <TabsContent value="trust" className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <Panel title="Ratings and reviews" subtitle="Feedback that protects service quality"><div className="space-y-2.5">{reviews.length ? reviews.map((x) => <div key={x.id} className={`rounded-xl border px-4 py-4 ${x.rating <= 2 ? "border-rose-200 bg-rose-50/70" : "border-slate-200 bg-slate-50"}`}><div className="flex items-center justify-between gap-4"><div><p className="text-sm font-semibold text-slate-950">{x.caregiver_name || "Caregiver"} / Booking #{x.booking_id}</p><p className="text-xs uppercase tracking-[0.18em] text-slate-500">From {x.patient_name || "Patient"}</p></div><div className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-sm font-semibold text-amber-800"><Star className="h-4 w-4 fill-current" />{x.rating}/5</div></div><p className="mt-3 text-sm leading-6 text-slate-700">{x.comment || "No written feedback provided."}</p></div>) : <Empty icon={Star} title="No reviews yet" body="Patient feedback will appear here once completed visits are reviewed." />}</div></Panel>
-                  <Panel title="Trust radar" subtitle="Quick quality read" dark><div className="grid gap-3"><Signal label="Low-rated reviews" value={String(reviews.filter((x) => x.rating <= 2).length)} /><Signal label="Five-star reviews" value={String(reviews.filter((x) => x.rating === 5).length)} /><Signal label="Rejected caregivers" value={String(approvalCounts.rejected)} /></div></Panel>
+                  <div className="space-y-6">
+                    <Panel title="Trust radar" subtitle="Quick quality read" dark><div className="grid gap-3"><Signal label="Low-rated reviews" value={String(reviews.filter((x) => x.rating <= 2).length)} /><Signal label="Five-star reviews" value={String(reviews.filter((x) => x.rating === 5).length)} /><Signal label="Rejected caregivers" value={String(approvalCounts.rejected)} /></div></Panel>
+                    <Panel title="Face review" subtitle="Failed or overridden arrival face checks">
+                      <div className="space-y-3">
+                        {failedFaceBookings.length ? failedFaceBookings.map((booking) => {
+                          const review = faceReviews[booking.id];
+                          return (
+                            <div key={booking.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-950">Booking #{booking.id}</p>
+                                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{booking.caregiver.name || "Caregiver"} / {booking.patient.name || "Patient"}</p>
+                                </div>
+                                <Status value={booking.face_verification_status || "failed"} label={booking.face_verification_status || "failed"} />
+                              </div>
+                              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                                <Cell l="OTP" v={booking.otp_verified ? "Verified" : "Pending"} />
+                                <Cell l="Face" v={(booking.face_verification_status || "pending").replaceAll("_", " ")} />
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button className="h-10 text-sm" variant="outline" disabled={busy === `face-review-${booking.id}`} onClick={() => void loadFaceReview(booking.id)}>
+                                  {busy === `face-review-${booking.id}` ? "Loading..." : "Load face review"}
+                                </Button>
+                                <Button className="h-10 text-sm" disabled={busy === `override-${booking.id}` || booking.face_verification_status === "manual_override"} onClick={() => void act(`override-${booking.id}`, () => adminAPI.approveFaceOverride(booking.id), "Manual override approved.")}>
+                                  Approve manual override
+                                </Button>
+                              </div>
+                              {review ? (
+                                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Profile photo</p>
+                                    {review.profile_photo_document_id ? <img src={getCaregiverDocumentUrl(review.profile_photo_document_id)} alt={`Booking ${booking.id} profile`} className="mt-3 h-48 w-full rounded-lg object-cover" /> : <p className="mt-3 text-sm text-slate-500">Profile photo unavailable.</p>}
+                                  </div>
+                                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Arrival selfie</p>
+                                    {review.arrival_selfie_document_id ? <img src={getCaregiverDocumentUrl(review.arrival_selfie_document_id)} alt={`Booking ${booking.id} selfie`} className="mt-3 h-48 w-full rounded-lg object-cover" /> : <p className="mt-3 text-sm text-slate-500">Arrival selfie unavailable.</p>}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        }) : <p className="text-sm text-slate-500">No face verification reviews are waiting right now.</p>}
+                      </div>
+                    </Panel>
+                  </div>
                 </TabsContent>
               </Tabs>
             )}
