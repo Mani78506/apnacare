@@ -12,6 +12,7 @@ geopy
 qrcode[pil]
 razorpay
 deepface
+tf-keras
 opencv-python-headless
 numpy
 Pillow
