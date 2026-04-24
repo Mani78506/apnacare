@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useStore } from "@/store/useStore";
 import { useSocket } from "@/hooks/useSocket";
-import { CaregiverDocumentSummary, PublicCaregiverProfile, bookingAPI, getCaregiverDocumentUrl, getQrCodeUrl, paymentAPI, trackingAPI } from "@/lib/api";
+import { BookingTask, CaregiverDocumentSummary, PublicCaregiverProfile, bookingAPI, getCaregiverDocumentUrl, getQrCodeUrl, paymentAPI, trackingAPI } from "@/lib/api";
 import TrackingMapPanel from "@/components/TrackingMapPanel";
 import StatusBadge from "@/components/StatusBadge";
 import Navbar from "@/components/Navbar";
@@ -38,12 +38,21 @@ function getDistanceKm(start: { lat: number; lng: number }, end: { lat: number; 
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function formatApiTime(value: string | null | undefined) {
+  if (!value) return null;
+  const normalizedValue = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+  const parsedDate = new Date(normalizedValue);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+  return parsedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function TrackingPage() {
   const { bookingId } = useParams<{ bookingId: string }>();
   const navigate = useNavigate();
-  const { caregiverLocation, bookingStatus, eta, setETA, setBookingId, setBookingStatus } = useStore();
+  const { caregiverLocation, bookingStatus, eta, setETA, setBookingId, setBookingStatus, setCaregiverLocation } = useStore();
   const [assignedCaregiver, setAssignedCaregiver] = useState<PublicCaregiverProfile | null>(null);
   const [bookingAmount, setBookingAmount] = useState<number | null>(null);
+  const [tasks, setTasks] = useState<BookingTask[]>([]);
   const [assignedDistanceKm, setAssignedDistanceKm] = useState<number | null>(null);
   const [assignmentReason, setAssignmentReason] = useState<string | null>(null);
   const [preferredGender, setPreferredGender] = useState<string | null>(null);
@@ -65,6 +74,7 @@ export default function TrackingPage() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [completionPromptShown, setCompletionPromptShown] = useState(false);
   const reviewSectionRef = useRef<HTMLElement | null>(null);
+  const announcedTaskIdsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     if (bookingId) setBookingId(bookingId);
@@ -73,22 +83,41 @@ export default function TrackingPage() {
   useSocket(bookingId ?? null);
 
   useEffect(() => {
-    if (!navigator.geolocation) return setUserLocation(FALLBACK_LOCATION);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => setUserLocation(FALLBACK_LOCATION),
-      { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 },
-    );
-  }, []);
-
-  useEffect(() => {
     if (!bookingId) return;
     const fetchTrackingDetails = async () => {
       try {
         const res = await trackingAPI.getDetails(bookingId);
         setBookingStatus(res.data.booking.status);
+        if (
+          res.data.booking.user_latitude != null &&
+          res.data.booking.user_longitude != null
+        ) {
+          setUserLocation({
+            lat: res.data.booking.user_latitude,
+            lng: res.data.booking.user_longitude,
+          });
+        } else {
+          setUserLocation(FALLBACK_LOCATION);
+        }
+        if (res.data.latest_location?.lat != null && res.data.latest_location?.lng != null) {
+          setCaregiverLocation({ lat: res.data.latest_location.lat, lng: res.data.latest_location.lng });
+        } else if (!res.data.booking.caregiver || res.data.booking.status === "pending" || res.data.booking.status === "cancelled") {
+          setCaregiverLocation(null);
+        }
         setAssignedCaregiver(res.data.booking.caregiver ?? null);
         setBookingAmount(res.data.booking.amount ?? null);
+        const nextTasks = res.data.booking.tasks ?? [];
+        setTasks(nextTasks);
+        nextTasks.forEach((task) => {
+          const isDone = Boolean(task.completed || task.status === "completed");
+          if (!isDone || announcedTaskIdsRef.current.has(task.id)) {
+            return;
+          }
+
+          announcedTaskIdsRef.current.add(task.id);
+          const completedLabel = formatApiTime(task.completed_at) ?? "just now";
+          toast.success(`${task.name} completed at ${completedLabel}`);
+        });
         setAssignedDistanceKm(res.data.booking.assigned_distance_km ?? null);
         setAssignmentReason(res.data.booking.assignment_reason ?? null);
         setPreferredGender(res.data.booking.preferred_gender ?? null);
@@ -146,9 +175,11 @@ export default function TrackingPage() {
   }, [bookingStatus, completionPromptShown, reviewSubmitted, reviewSectionRef]);
 
   const displayUserLocation = userLocation ?? FALLBACK_LOCATION;
-  const distanceKm = useMemo(() => (caregiverLocation ? getDistanceKm(displayUserLocation, caregiverLocation) : null), [caregiverLocation, displayUserLocation]);
+  const routeStageIndex = STATUS_STEPS.indexOf(bookingStatus as (typeof STATUS_STEPS)[number]);
+  const hasActiveAssignment = bookingStatus !== "pending" && bookingStatus !== "cancelled";
+  const hasLiveTracking = hasActiveAssignment && Boolean(assignedCaregiver) && Boolean(caregiverLocation);
+  const distanceKm = useMemo(() => (hasLiveTracking && caregiverLocation ? getDistanceKm(displayUserLocation, caregiverLocation) : null), [caregiverLocation, displayUserLocation, hasLiveTracking]);
   const lastUpdateLabel = lastLocationUpdate ? lastLocationUpdate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Awaiting first ping";
-  const routeStageIndex = Math.max(STATUS_STEPS.indexOf(bookingStatus as (typeof STATUS_STEPS)[number]), 0);
   const allDocuments = assignedCaregiver?.documents ?? [];
   const profilePhoto = allDocuments.find((document) => document.document_type === "profile") ?? null;
   const qrCodeUrl = getQrCodeUrl(qrCodePath);
@@ -250,8 +281,8 @@ export default function TrackingPage() {
         <section className="mt-6 grid gap-6 xl:grid-cols-[1.45fr_0.85fr]">
           <div className="space-y-6">
             <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_20px_70px_rgba(15,23,42,0.06)]">
-              <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Live map</p><h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{caregiverLocation ? "Caregiver route is active" : "Tracking starts once movement begins"}</h2></div><div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">Last sync {lastUpdateLabel}</div></div>
-              <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-slate-50">{caregiverLocation ? <TrackingMapPanel caregiverLocation={caregiverLocation} userLocation={userLocation} /> : <div className="flex h-[360px] items-center justify-center px-6 text-center"><div className="max-w-lg"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-700"><Navigation className="h-6 w-6" /></div><h3 className="mt-4 text-2xl font-semibold tracking-[-0.03em] text-slate-950">The map will update automatically.</h3><p className="mt-3 text-sm leading-6 text-slate-600">Until then, use the payment, OTP, and caregiver panels below.</p></div></div>}</div>
+              <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Live map</p><h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{hasLiveTracking ? "Caregiver route is active" : "Map activates after caregiver assignment and live location share"}</h2></div><div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">Last sync {hasLiveTracking ? lastUpdateLabel : "Waiting for live route"}</div></div>
+              <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-slate-50">{hasLiveTracking ? <TrackingMapPanel caregiverLocation={caregiverLocation} userLocation={userLocation} /> : <div className="flex h-[360px] items-center justify-center px-6 text-center"><div className="max-w-lg"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-700"><Navigation className="h-6 w-6" /></div><h3 className="mt-4 text-2xl font-semibold tracking-[-0.03em] text-slate-950">No live caregiver route yet.</h3><p className="mt-3 text-sm leading-6 text-slate-600">{assignedCaregiver ? "The caregiver is assigned, but live location sharing has not started yet." : "Once a caregiver is assigned and starts sharing location, the map will appear here automatically."}</p></div></div>}</div>
             </section>
 
             <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_20px_70px_rgba(15,23,42,0.06)]">
@@ -265,7 +296,93 @@ export default function TrackingPage() {
             <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_20px_70px_rgba(15,23,42,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Progress</p>
               <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Care journey</h2>
-              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{STATUS_STEPS.map((step, index) => <div key={step} className={`rounded-[18px] border p-4 ${bookingStatus === step ? "border-cyan-200 bg-cyan-50" : routeStageIndex >= index ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}><div className="flex items-start gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-2xl text-sm font-semibold ${bookingStatus === step ? "bg-cyan-600 text-white" : routeStageIndex >= index ? "bg-emerald-600 text-white" : "bg-white text-slate-600"}`}>{index + 1}</div><div><p className="font-semibold capitalize text-slate-950">{step.replaceAll("_", " ")}</p><p className="mt-1 text-sm leading-5 text-slate-600">{STATUS_COPY[step]}</p></div></div></div>)}</div>
+              {hasActiveAssignment ? (
+                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {STATUS_STEPS.map((step, index) => (
+                    <div
+                      key={step}
+                      className={`rounded-[18px] border p-4 ${
+                        bookingStatus === step
+                          ? "border-cyan-200 bg-cyan-50"
+                          : routeStageIndex >= index
+                            ? "border-emerald-200 bg-emerald-50"
+                            : "border-slate-200 bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`flex h-9 w-9 items-center justify-center rounded-2xl text-sm font-semibold ${
+                            bookingStatus === step
+                              ? "bg-cyan-600 text-white"
+                              : routeStageIndex >= index
+                                ? "bg-emerald-600 text-white"
+                                : "bg-white text-slate-600"
+                          }`}
+                        >
+                          {index + 1}
+                        </div>
+                        <div>
+                          <p className="font-semibold capitalize text-slate-950">{step.replaceAll("_", " ")}</p>
+                          <p className="mt-1 text-sm leading-5 text-slate-600">{STATUS_COPY[step]}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-[18px] border border-amber-200 bg-amber-50 px-5 py-5 text-sm leading-6 text-amber-900">
+                  No caregiver has been assigned yet, so the live care journey has not started. Increase the search range or wait until a caregiver becomes available nearby.
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_20px_70px_rgba(15,23,42,0.06)]">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-700">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Care checklist</p>
+                  <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Patient notes in action</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">See each caregiver task as it gets completed during the visit.</p>
+                </div>
+              </div>
+              <div className="mt-5 grid gap-3">
+                {tasks.length ? tasks.map((task) => {
+                  const isDone = Boolean(task.completed || task.status === "completed");
+                  const completedLabel = formatApiTime(task.completed_at);
+                  return (
+                    <div
+                      key={task.id}
+                      className={`rounded-[18px] border px-4 py-4 ${
+                        isDone ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="font-semibold text-slate-950">{task.name}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {isDone && completedLabel ? `Completed at ${completedLabel}` : "Waiting for caregiver completion"}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${
+                            isDone
+                              ? "border-emerald-200 bg-white text-emerald-700"
+                              : "border-slate-200 bg-white text-slate-600"
+                          }`}
+                        >
+                          {isDone ? "Completed" : "Pending"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                    No care tasks have been created for this booking yet.
+                  </div>
+                )}
+              </div>
             </section>
 
             {bookingStatus === "completed" ? (
@@ -334,6 +451,10 @@ export default function TrackingPage() {
               {assignmentReason ? (
                 <div className="mt-4 rounded-[18px] border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900">
                   {assignmentReason}
+                </div>
+              ) : bookingStatus === "pending" ? (
+                <div className="mt-4 rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                  No caregiver available within selected range. Try increasing range.
                 </div>
               ) : null}
               {allDocuments.length ? <div className="mt-5 grid gap-2">{allDocuments.map((document) => <DocumentLink key={document.id} document={document} onOpen={setSelectedDocument} />)}</div> : null}

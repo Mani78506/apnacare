@@ -26,6 +26,38 @@ export interface CaregiverSessionUser {
   caregiver_verified?: boolean | null;
 }
 
+function hasWindow() {
+  return typeof window !== "undefined";
+}
+
+export function readSessionValue(key: string): string | null {
+  if (!hasWindow()) return null;
+
+  const sessionValue = window.sessionStorage.getItem(key);
+  if (sessionValue !== null) {
+    return sessionValue;
+  }
+
+  const legacyValue = window.localStorage.getItem(key);
+  if (legacyValue !== null) {
+    window.sessionStorage.setItem(key, legacyValue);
+    window.localStorage.removeItem(key);
+  }
+  return legacyValue;
+}
+
+export function setSessionValue(key: string, value: string) {
+  if (!hasWindow()) return;
+  window.sessionStorage.setItem(key, value);
+  window.localStorage.removeItem(key);
+}
+
+export function removeSessionValue(key: string) {
+  if (!hasWindow()) return;
+  window.sessionStorage.removeItem(key);
+  window.localStorage.removeItem(key);
+}
+
 function decodeTokenPayload(token: string | null): Record<string, unknown> | null {
   if (!token) return null;
 
@@ -42,7 +74,7 @@ function decodeTokenPayload(token: string | null): Record<string, unknown> | nul
 }
 
 function getRoleFromToken(tokenKey: string): string | null {
-  const payload = decodeTokenPayload(localStorage.getItem(tokenKey));
+  const payload = decodeTokenPayload(readSessionValue(tokenKey));
   return typeof payload?.role === "string" ? payload.role : null;
 }
 
@@ -65,7 +97,7 @@ function getActivePortalRoles(): PortalRole[] {
 }
 
 export function getStoredSharedUser(): SharedSessionUser | null {
-  const rawUser = localStorage.getItem(SHARED_USER_KEY);
+  const rawUser = readSessionValue(SHARED_USER_KEY);
   const tokenRole = getRoleFromToken(SHARED_TOKEN_KEY);
   if (!rawUser) {
     return tokenRole ? { role: tokenRole } : null;
@@ -87,7 +119,7 @@ export function getStoredSharedRole(): SharedRole | null {
 }
 
 export function getStoredAdminUser(): SharedSessionUser | null {
-  const rawUser = localStorage.getItem(ADMIN_USER_KEY);
+  const rawUser = readSessionValue(ADMIN_USER_KEY);
   const tokenRole = getRoleFromToken(ADMIN_TOKEN_KEY);
   if (!rawUser) {
     return tokenRole === "admin" ? { role: tokenRole } : null;
@@ -104,7 +136,7 @@ export function getStoredAdminUser(): SharedSessionUser | null {
 }
 
 export function getStoredCaregiverUser(): CaregiverSessionUser | null {
-  const rawUser = localStorage.getItem(CAREGIVER_USER_KEY);
+  const rawUser = readSessionValue(CAREGIVER_USER_KEY);
   const tokenRole = getRoleFromToken(CAREGIVER_TOKEN_KEY);
 
   if (!rawUser) {
@@ -122,11 +154,11 @@ export function getStoredCaregiverUser(): CaregiverSessionUser | null {
 }
 
 export function setLastActivePortal(role: PortalRole) {
-  localStorage.setItem(LAST_ACTIVE_PORTAL_KEY, role);
+  setSessionValue(LAST_ACTIVE_PORTAL_KEY, role);
 }
 
 export function getLastActivePortal(): PortalRole | null {
-  const role = localStorage.getItem(LAST_ACTIVE_PORTAL_KEY);
+  const role = readSessionValue(LAST_ACTIVE_PORTAL_KEY);
   return role === "admin" || role === "user" || role === "caregiver" ? role : null;
 }
 
@@ -148,24 +180,24 @@ export function getPortalSessionRoles(): PortalRole[] {
 
 function clearLastActivePortalIf(role: PortalRole) {
   if (getLastActivePortal() === role) {
-    localStorage.removeItem(LAST_ACTIVE_PORTAL_KEY);
+    removeSessionValue(LAST_ACTIVE_PORTAL_KEY);
   }
 }
 
 export function clearSharedSession() {
   clearLastActivePortalIf("user");
-  localStorage.removeItem(SHARED_TOKEN_KEY);
-  localStorage.removeItem(SHARED_USER_KEY);
+  removeSessionValue(SHARED_TOKEN_KEY);
+  removeSessionValue(SHARED_USER_KEY);
 }
 
 export function clearAdminSession() {
   clearLastActivePortalIf("admin");
-  localStorage.removeItem(ADMIN_TOKEN_KEY);
-  localStorage.removeItem(ADMIN_USER_KEY);
+  removeSessionValue(ADMIN_TOKEN_KEY);
+  removeSessionValue(ADMIN_USER_KEY);
 }
 
 export function clearCaregiverSession() {
   clearLastActivePortalIf("caregiver");
-  localStorage.removeItem(CAREGIVER_TOKEN_KEY);
-  localStorage.removeItem(CAREGIVER_USER_KEY);
+  removeSessionValue(CAREGIVER_TOKEN_KEY);
+  removeSessionValue(CAREGIVER_USER_KEY);
 }

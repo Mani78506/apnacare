@@ -1,4 +1,5 @@
 import axios from "axios";
+import { clearAdminSession, clearCaregiverSession, clearSharedSession, readSessionValue } from "@/lib/session";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://apnacare-backend-2p21.onrender.com";
 const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL || API_BASE_URL.replace(/^http/i, "ws");
@@ -40,12 +41,37 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (res) => res,
-  (error) => Promise.reject(error)
+  (error) => {
+    const status = error?.response?.status;
+    const requestUrl = `${error?.config?.baseURL ?? ""}${error?.config?.url ?? ""}`;
+    const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
+
+    if (status === 401) {
+      if (/\/admin(\/|$)/.test(requestUrl)) {
+        clearAdminSession();
+        if (/^\/admin(\/|$)/.test(currentPath) && currentPath !== "/admin/login") {
+          window.location.replace("/admin/login");
+        }
+      } else if (/\/caregiver(\/|$)|\/booking\/verify-otp(\/|$)|\/booking\/face-verify(\/|$)|\/booking\/latest(\/|$)/.test(requestUrl)) {
+        clearCaregiverSession();
+        if (/^\/caregiver(\/|$)/.test(currentPath) && currentPath !== "/caregiver/login") {
+          window.location.replace("/caregiver/login");
+        }
+      } else {
+        clearSharedSession();
+        if (!/^\/(login|signup|forgot-password|reset-password)/.test(currentPath)) {
+          window.location.replace("/login");
+        }
+      }
+    }
+
+    return Promise.reject(error);
+  }
 );
 
-const getUserToken = () => localStorage.getItem("apnacare_token");
-const getAdminToken = () => localStorage.getItem("apnacare_admin_token");
-const getCaregiverToken = () => localStorage.getItem("apnacare_caregiver_token");
+const getUserToken = () => readSessionValue("apnacare_token");
+const getAdminToken = () => readSessionValue("apnacare_admin_token");
+const getCaregiverToken = () => readSessionValue("apnacare_caregiver_token");
 const withBearer = (token: string | null) => (token ? { Authorization: `Bearer ${token}` } : {});
 
 export interface BookingReview {
@@ -55,11 +81,20 @@ export interface BookingReview {
   created_at?: string | null;
 }
 
+export interface BookingTask {
+  id: number;
+  name: string;
+  completed: boolean;
+  status: string;
+  completed_at?: string | null;
+}
+
 export interface PublicCaregiverProfile {
   id: number;
   full_name: string | null;
   phone?: string | null;
   email?: string | null;
+  address?: string | null;
   gender?: string | null;
   experience?: number | null;
   skills: string[];
@@ -80,8 +115,10 @@ export interface BookingSummary {
   patient_age?: number | null;
   patient_condition?: string | null;
   preferred_gender?: string | null;
+  user_address?: string | null;
   user_latitude?: number | null;
   user_longitude?: number | null;
+  search_radius_km?: number | null;
   assigned_distance_km?: number | null;
   assignment_reason?: string | null;
   service_type?: string | null;
@@ -106,6 +143,7 @@ export interface BookingSummary {
   end_time?: string | null;
   prescription_file_name?: string | null;
   has_prescription?: boolean;
+  tasks?: BookingTask[];
   caregiver?: PublicCaregiverProfile | null;
   has_review?: boolean;
   review?: BookingReview | null;
@@ -118,6 +156,7 @@ export interface CaregiverProfileSummary {
   phone: string | null;
   email?: string | null;
   location: string | null;
+  address?: string | null;
   gender?: "male" | "female" | "other" | null;
   skills: string[];
   experience: number | null;
@@ -162,6 +201,7 @@ export interface AdminBookingPerson {
 }
 
 export interface AdminBookingCaregiver extends AdminBookingPerson {
+  address?: string | null;
   gender?: string | null;
   status?: string | null;
   is_available?: boolean | null;
@@ -366,6 +406,7 @@ export const authAPI = {
     password: string;
     role?: "user" | "caregiver";
     location?: string;
+    address?: string;
     gender?: "male" | "female" | "other";
     latitude?: number;
     longitude?: number;
@@ -393,8 +434,10 @@ export const bookingAPI = {
     notes?: string;
     patient_condition?: string;
     preferred_gender?: "any" | "male" | "female";
+    user_address?: string;
     user_latitude?: number;
     user_longitude?: number;
+    search_radius_km?: number;
     duration_type?: string;
     hours?: number;
     days?: number;
@@ -459,6 +502,8 @@ export const trackingAPI = {
         qr_code_path?: string | null;
         service_type?: string | null;
         preferred_gender?: string | null;
+        user_address?: string | null;
+        search_radius_km?: number | null;
         assigned_distance_km?: number | null;
         assignment_reason?: string | null;
         patient_name?: string | null;
@@ -466,6 +511,7 @@ export const trackingAPI = {
         start_time?: string | null;
         end_time?: string | null;
         amount?: number | null;
+        tasks?: BookingTask[];
         has_review?: boolean;
         review?: BookingReview | null;
         caregiver?: PublicCaregiverProfile | null;
@@ -480,8 +526,12 @@ export const caregiverAPI = {
     api.post("/caregiver/update-location", payload, { headers: withBearer(getCaregiverToken()) }),
   updateStatus: (payload: { booking_id: number; status: string }) =>
     api.post("/caregiver/update-status", payload, { headers: withBearer(getCaregiverToken()) }),
-  updateAvailability: (payload: { caregiver_id?: number; is_available: boolean; latitude?: number; longitude?: number }) =>
+  updateAvailability: (payload: { caregiver_id?: number; is_available: boolean; address?: string; latitude?: number; longitude?: number }) =>
     api.post<{ message: string; caregiver?: CaregiverProfileSummary }>("/caregiver/toggle-availability", payload, {
+      headers: withBearer(getCaregiverToken()),
+    }),
+  updateProfileLocation: (payload: { caregiver_id: number; address: string; latitude: number; longitude: number }) =>
+    api.post<{ message: string; caregiver?: CaregiverProfileSummary }>("/caregiver/update-profile-location", payload, {
       headers: withBearer(getCaregiverToken()),
     }),
   rejectBooking: (bookingId: number) =>
@@ -557,6 +607,11 @@ export const paymentAPI = {
   pay: (bookingId: number) => api.post(`/payment/pay/${bookingId}`, {}, { headers: withBearer(getUserToken()) }),
   getStatus: (bookingId: number) =>
     api.get<PaymentStatusResponse>(`/payment/status/${bookingId}`, { headers: withBearer(getUserToken()) }),
+};
+
+export const locationAPI = {
+  geocodeAddress: (address: string) =>
+    api.post<{ address: string; latitude: number; longitude: number }>("/location/geocode", { address }),
 };
 
 export const getWebSocketURL = (bookingId: string) => `${WS_BASE_URL}/tracking/ws/${bookingId}`;

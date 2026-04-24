@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { clearSharedSession, getStoredSharedUser, SHARED_TOKEN_KEY, SHARED_USER_KEY } from "@/lib/session";
+import { clearSharedSession, getStoredSharedUser, readSessionValue, setSessionValue, removeSessionValue, SHARED_TOKEN_KEY, SHARED_USER_KEY } from "@/lib/session";
 
 interface User {
   id?: number;
@@ -36,20 +36,20 @@ const parsedUser = (getStoredSharedUser() as User | null) ?? null;
 
 export const useStore = create<AppState>((set) => ({
   user: parsedUser,
-  token: localStorage.getItem(SHARED_TOKEN_KEY),
+  token: readSessionValue(SHARED_TOKEN_KEY),
   bookingId: null,
   caregiverLocation: null,
   bookingStatus: "pending",
   eta: null,
 
   setUser: (user) => {
-    if (user) localStorage.setItem(SHARED_USER_KEY, JSON.stringify(user));
-    else localStorage.removeItem(SHARED_USER_KEY);
+    if (user) setSessionValue(SHARED_USER_KEY, JSON.stringify(user));
+    else removeSessionValue(SHARED_USER_KEY);
     set({ user });
   },
   setToken: (token) => {
-    if (token) localStorage.setItem(SHARED_TOKEN_KEY, token);
-    else localStorage.removeItem(SHARED_TOKEN_KEY);
+    if (token) setSessionValue(SHARED_TOKEN_KEY, token);
+    else removeSessionValue(SHARED_TOKEN_KEY);
     set({ token });
   },
   setBookingId: (bookingId) => set({ bookingId }),

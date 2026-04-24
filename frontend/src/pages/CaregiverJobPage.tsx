@@ -4,6 +4,7 @@ import { Activity, CheckCircle2, Clock3, MapPinned, Navigation, Radio, Route, Sh
 import Sidebar from "@/components/Sidebar";
 import CaregiverNavbar from "@/components/CaregiverNavbar";
 import api, { bookingAPI, caregiverAPI, getTrackingWebSocketUrl } from "@/lib/api";
+import { readSessionValue } from "@/lib/session";
 import { useLocation as useLiveLocation } from "@/hooks/useLocation";
 import { BookingSummary, CaregiverUser, useCaregiverStore } from "@/store/useCaregiverStore";
 import { formatLabel } from "@/lib/utils";
@@ -36,6 +37,15 @@ interface TaskItem {
   name?: string;
   completed?: boolean;
   status?: string;
+  completed_at?: string | null;
+}
+
+function formatApiTime(value: string | null | undefined) {
+  if (!value) return null;
+  const normalizedValue = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+  const parsedDate = new Date(normalizedValue);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+  return parsedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export default function CaregiverJobPage() {
@@ -261,7 +271,7 @@ export default function CaregiverJobPage() {
       return;
     }
 
-    const caregiverToken = localStorage.getItem("apnacare_caregiver_token");
+    const caregiverToken = readSessionValue("apnacare_caregiver_token");
     const headers = caregiverToken ? { Authorization: `Bearer ${caregiverToken}` } : {};
     const isSameTaskSet = taskRequestKeyRef.current === activeBookingId;
 
@@ -417,13 +427,14 @@ export default function CaregiverJobPage() {
   };
 
   const completeTask = async (taskId: number) => {
-    const caregiverToken = localStorage.getItem("apnacare_caregiver_token");
+    const caregiverToken = readSessionValue("apnacare_caregiver_token");
     const headers = caregiverToken ? { Authorization: `Bearer ${caregiverToken}` } : {};
 
     setUpdatingTaskId(taskId);
     setTaskError(null);
     try {
-      await api.post(`/task/update/${taskId}`, {}, { headers });
+      const response = await api.post(`/task/update/${taskId}`, {}, { headers });
+      const updatedTask = response.data?.task;
       setTasks((current) =>
         current.map((task) =>
           task.id === taskId
@@ -431,6 +442,7 @@ export default function CaregiverJobPage() {
                 ...task,
                 completed: true,
                 status: "completed",
+                completed_at: updatedTask?.completed_at ?? new Date().toISOString(),
               }
             : task,
         ),
@@ -790,12 +802,16 @@ export default function CaregiverJobPage() {
                       {tasks.map((task) => {
                         const taskLabel = task.task_name || task.name || `Task #${task.id}`;
                         const isDone = Boolean(task.completed || task.status === "completed");
+                        const completedLabel = formatApiTime(task.completed_at);
 
                         return (
                           <div key={task.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/50 p-4 md:flex-row md:items-center md:justify-between">
                             <div>
                               <p className="font-medium text-white">{taskLabel}</p>
-                              <p className="text-sm text-slate-400">Task ID #{task.id}</p>
+                              <p className="text-sm text-slate-400">
+                                Task ID #{task.id}
+                                {completedLabel ? ` / Completed ${completedLabel}` : ""}
+                              </p>
                             </div>
                             {isDone ? (
                               <span className="inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-sm font-medium text-emerald-200">

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { CAREGIVER_TOKEN_KEY, CAREGIVER_USER_KEY, clearCaregiverSession, getStoredCaregiverUser } from "@/lib/session";
+import { CAREGIVER_TOKEN_KEY, CAREGIVER_USER_KEY, clearCaregiverSession, getStoredCaregiverUser, readSessionValue, removeSessionValue, setSessionValue } from "@/lib/session";
 
 export interface CaregiverUser {
   id: number;
@@ -62,21 +62,21 @@ interface CaregiverState {
 const parsedUser = (getStoredCaregiverUser() as CaregiverUser | null) ?? null;
 
 export const useCaregiverStore = create<CaregiverState>((set) => ({
-  token: localStorage.getItem(CAREGIVER_TOKEN_KEY),
+  token: readSessionValue(CAREGIVER_TOKEN_KEY),
   user: parsedUser,
   caregiverId: parsedUser?.caregiver_id ?? null,
   currentBooking: null,
   liveLocation: null,
   setSession: (token, user) => {
-    localStorage.setItem(CAREGIVER_TOKEN_KEY, token);
-    localStorage.setItem(CAREGIVER_USER_KEY, JSON.stringify(user));
+    setSessionValue(CAREGIVER_TOKEN_KEY, token);
+    setSessionValue(CAREGIVER_USER_KEY, JSON.stringify(user));
     set({ token, user, caregiverId: user.caregiver_id ?? null });
   },
   setUser: (user) => {
     if (user) {
-      localStorage.setItem(CAREGIVER_USER_KEY, JSON.stringify(user));
+      setSessionValue(CAREGIVER_USER_KEY, JSON.stringify(user));
     } else {
-      localStorage.removeItem(CAREGIVER_USER_KEY);
+      removeSessionValue(CAREGIVER_USER_KEY);
     }
     set({ user, caregiverId: user?.caregiver_id ?? null });
   },

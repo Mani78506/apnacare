@@ -15,12 +15,13 @@ from app.models import location as location_model  # noqa: F401
 from app.models import notification as notification_model  # noqa: F401
 from app.models import payment_transaction as payment_transaction_model  # noqa: F401
 from app.models import review as review_model  # noqa: F401
+from app.models import task as task_model  # noqa: F401
 from app.models import user as user_model  # noqa: F401
 from app.models.caregiver import Caregiver
 from app.models.document import Document
 from app.models.booking import Booking
 from app.models.user import User
-from app.routes import admin, auth, booking, caregiver, onboarding, tracking
+from app.routes import admin, auth, booking, caregiver, location_lookup, onboarding, tracking
 from app.routes import task, payment
 from app.services.pricing_service import calculate_amount
 
@@ -46,10 +47,14 @@ def ensure_booking_columns() -> None:
         statements.append("ALTER TABLE bookings ADD COLUMN patient_condition VARCHAR DEFAULT 'elderly_care'")
     if "preferred_gender" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN preferred_gender VARCHAR DEFAULT 'any'")
+    if "user_address" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN user_address VARCHAR")
     if "user_latitude" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN user_latitude FLOAT")
     if "user_longitude" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN user_longitude FLOAT")
+    if "search_radius_km" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN search_radius_km FLOAT DEFAULT 10")
     if "assigned_distance_km" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN assigned_distance_km FLOAT")
     if "assignment_reason" not in existing_columns:
@@ -118,6 +123,32 @@ def ensure_booking_columns() -> None:
 ensure_booking_columns()
 
 
+def ensure_user_columns() -> None:
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    statements: list[str] = []
+
+    if "address" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN address VARCHAR")
+    if "latitude" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN latitude FLOAT")
+    if "longitude" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN longitude FLOAT")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+ensure_user_columns()
+
+
 def backfill_booking_rows() -> None:
     db = SessionLocal()
     try:
@@ -145,6 +176,9 @@ def backfill_booking_rows() -> None:
                 changed = True
             if booking.preferred_gender is None:
                 booking.preferred_gender = "any"
+                changed = True
+            if booking.search_radius_km is None or booking.search_radius_km <= 0:
+                booking.search_radius_km = 10
                 changed = True
             if booking.service_type is None:
                 booking.service_type = "elder_care"
@@ -218,6 +252,8 @@ def ensure_caregiver_columns() -> None:
 
     if "location" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN location VARCHAR")
+    if "address" not in existing_columns:
+        statements.append("ALTER TABLE caregivers ADD COLUMN address VARCHAR")
     if "gender" not in existing_columns:
         statements.append("ALTER TABLE caregivers ADD COLUMN gender VARCHAR")
     if "full_name" not in existing_columns:
@@ -284,6 +320,28 @@ def ensure_notification_columns() -> None:
 
 
 ensure_notification_columns()
+
+
+def ensure_task_columns() -> None:
+    inspector = inspect(engine)
+    if "tasks" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("tasks")}
+    statements: list[str] = []
+
+    if "completed_at" not in existing_columns:
+        statements.append("ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMP")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+ensure_task_columns()
 
 
 def migrate_legacy_caregiver_documents() -> None:
@@ -357,6 +415,7 @@ app.mount("/qr_codes", StaticFiles(directory="qr_codes"), name="qr_codes")
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(booking.router, prefix="/booking", tags=["Booking"])
 app.include_router(caregiver.router, prefix="/caregiver", tags=["Caregiver"])
+app.include_router(location_lookup.router)
 app.include_router(onboarding.router)
 app.include_router(tracking.router, prefix="/tracking", tags=["Tracking"])
 app.include_router(task.router)

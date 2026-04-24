@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { bookingAPI, paymentAPI } from "@/lib/api";
+import { bookingAPI, locationAPI, paymentAPI } from "@/lib/api";
 import { useStore } from "@/store/useStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,11 +40,46 @@ const conditionLabels: Record<string, string> = {
   bedridden: "Bedridden",
 };
 
+const formatDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateInputValue = (value: string) => {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
+const calculateDisplayEndDate = (startDateValue: string, durationType: string, quantity: number) => {
+  if (!startDateValue || quantity <= 0) return "";
+
+  const startDate = parseDateInputValue(startDateValue);
+  if (!startDate) return "";
+
+  const endDate = new Date(startDate);
+  if (durationType === "daily") {
+    endDate.setDate(endDate.getDate() + quantity);
+    return formatDateInputValue(endDate);
+  }
+
+  if (durationType === "monthly") {
+    endDate.setMonth(endDate.getMonth() + quantity);
+    return formatDateInputValue(endDate);
+  }
+
+  return startDateValue;
+};
+
 export default function BookingPage() {
   const navigate = useNavigate();
   const { setBookingId, user } = useStore();
   const [loading, setLoading] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [bookingInlineMessage, setBookingInlineMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
   const [createdBookingId, setCreatedBookingId] = useState<number | null>(null);
   const [form, setForm] = useState({
     patient_name: "",
@@ -54,6 +89,8 @@ export default function BookingPage() {
     service_type: "elder_care",
     patient_condition: "",
     preferred_gender: "any",
+    user_address: "",
+    search_radius_km: "10",
     duration_type: "",
     hours: "",
     days: "",
@@ -73,6 +110,8 @@ export default function BookingPage() {
     latitude: number | null;
     longitude: number | null;
   }>({ status: "idle", latitude: null, longitude: null });
+  const [lastResolvedAddress, setLastResolvedAddress] = useState("");
+  const todayDateValue = useMemo(() => formatDateInputValue(new Date()), []);
 
   const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -122,7 +161,12 @@ export default function BookingPage() {
   const durationHelper =
     durationOptions.find((option) => option.value === form.duration_type)?.helper ?? "Choose a duration model to calculate the estimate.";
 
-  const canSubmit = Boolean(form.duration_type) && amount > 0;
+  const calculatedEndDate = useMemo(
+    () => calculateDisplayEndDate(form.date, form.duration_type, durationValue),
+    [durationValue, form.date, form.duration_type],
+  );
+  const selectedDateIsPast = Boolean(form.date) && form.date < todayDateValue;
+  const canSubmit = Boolean(form.duration_type) && amount > 0 && Boolean(form.date) && !selectedDateIsPast;
 
   const handleDurationChange = (value: string) => {
     setForm((f) => ({
@@ -151,11 +195,20 @@ export default function BookingPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!form.date) {
+      toast.error("Select a valid booking date.");
+      return;
+    }
+    if (selectedDateIsPast) {
+      toast.error("Booking date cannot be in the past.");
+      return;
+    }
     if (!canSubmit) {
       toast.error("Select a valid duration and quantity to continue.");
       return;
     }
     setLoading(true);
+    setBookingInlineMessage(null);
     try {
       const res = await bookingAPI.create({
         patient_name: form.patient_name,
@@ -165,8 +218,10 @@ export default function BookingPage() {
         service_type: form.service_type,
         patient_condition: form.patient_condition,
         preferred_gender: form.preferred_gender as "any" | "male" | "female",
+        user_address: form.user_address || undefined,
         user_latitude: locationState.latitude ?? undefined,
         user_longitude: locationState.longitude ?? undefined,
+        search_radius_km: Number(form.search_radius_km || 10),
         duration_type: form.duration_type,
         hours: form.duration_type === "hourly" ? Number(form.hours) : undefined,
         days: form.duration_type === "daily" ? Number(form.days) : undefined,
@@ -178,21 +233,40 @@ export default function BookingPage() {
       const bookingId = Number(res.data.booking_id);
       setCreatedBookingId(bookingId);
       setBookingId(String(bookingId));
+      const caregiverAssigned = Boolean(res.data?.caregiver?.id) || res.data?.status === "assigned";
 
       toast.success("Booking created successfully");
+      if (res.data?.message === "Location required for smart caregiver assignment.") {
+        toast.info("Booking saved. Add location next time to enable smart caregiver assignment.");
+      }
       if (form.payment_method === "cash_on_delivery") {
         toast.info("Cash on delivery selected");
         if (res.data?.caregiver?.name) {
           toast.info(`Caregiver assigned: ${res.data.caregiver.name}`);
+        } else if (res.data?.message === "No available caregiver found in your selected range") {
+          toast.info("No caregiver available within selected range. Try increasing range.");
         } else {
           toast.info("Payment choice saved. Caregiver assignment is pending availability.");
         }
-        navigate(`/tracking/${bookingId}`);
+        navigate(caregiverAssigned ? `/tracking/${bookingId}` : "/home");
       } else {
         toast.info("Complete payment to assign the best available caregiver.");
       }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Booking failed");
+      const message = err.response?.data?.detail || "Booking failed";
+      if (
+        message === "No available caregiver found in your selected range" ||
+        message === "Location required for smart caregiver assignment."
+      ) {
+        setBookingInlineMessage({
+          tone: "error",
+          text:
+            message === "No available caregiver found in your selected range"
+              ? "Booking was not created because no caregiver is available within your selected range. Try increasing the search radius or changing the address."
+              : "Booking was not created because a valid location is required for smart caregiver assignment.",
+        });
+      }
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -245,6 +319,10 @@ export default function BookingPage() {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         });
+        setForm((current) => ({
+          ...current,
+          user_address: current.user_address || "Current location selected",
+        }));
         toast.success("Location captured");
       },
       () => {
@@ -254,6 +332,68 @@ export default function BookingPage() {
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
     );
   };
+
+  const resolveAddressLocation = async () => {
+    const address = form.user_address.trim();
+    if (!address) {
+      toast.error("Enter the patient address first.");
+      return;
+    }
+
+    setResolvingAddress(true);
+    try {
+      const { data } = await locationAPI.geocodeAddress(address);
+      setForm((current) => ({ ...current, user_address: data.address }));
+      setLocationState({
+        status: "captured",
+        latitude: data.latitude,
+        longitude: data.longitude,
+      });
+      setLastResolvedAddress(data.address.trim().toLowerCase());
+      toast.success("Coordinates fetched from address");
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Unable to fetch coordinates for this address.");
+    } finally {
+      setResolvingAddress(false);
+    }
+  };
+
+  useEffect(() => {
+    const address = form.user_address.trim();
+    if (!address || address.length < 8) {
+      return;
+    }
+
+    const normalized = address.toLowerCase();
+    if (normalized === lastResolvedAddress || resolvingAddress) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        setResolvingAddress(true);
+        const { data } = await locationAPI.geocodeAddress(address);
+        setForm((current) => {
+          if (current.user_address.trim().toLowerCase() !== normalized) {
+            return current;
+          }
+          return { ...current, user_address: data.address };
+        });
+        setLocationState({
+          status: "captured",
+          latitude: data.latitude,
+          longitude: data.longitude,
+        });
+        setLastResolvedAddress(data.address.trim().toLowerCase());
+      } catch {
+        // Keep manual address entry untouched if auto-geocoding misses.
+      } finally {
+        setResolvingAddress(false);
+      }
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [form.user_address, lastResolvedAddress, resolvingAddress]);
 
   const handlePayment = async () => {
     if (!createdBookingId) return;
@@ -285,13 +425,16 @@ export default function BookingPage() {
         handler: async (response) => {
           try {
             const verification = await paymentAPI.verify(response);
+            const caregiverAssigned = Boolean(verification.data?.caregiver?.id) || verification.data?.booking_status === "assigned";
             toast.success("Payment successful");
             if (verification.data.caregiver?.name) {
               toast.info(`Caregiver assigned: ${verification.data.caregiver.name}`);
+            } else if (verification.data.assignment_reason?.includes("No available caregiver")) {
+              toast.info("No caregiver available within selected range. Try increasing range.");
             } else {
               toast.info("Payment verified. Caregiver assignment is pending availability.");
             }
-            navigate(`/tracking/${createdBookingId}`);
+            navigate(caregiverAssigned ? `/tracking/${createdBookingId}` : "/home");
           } catch (err: any) {
             toast.error(err.response?.data?.detail || "Payment verification failed");
           } finally {
@@ -420,10 +563,56 @@ export default function BookingPage() {
                       <Label className="text-sm font-semibold text-slate-950">Patient location</Label>
                       <p className="mt-1 text-xs text-slate-500">Location helps ApnaCare prefer the nearest approved caregiver.</p>
                     </div>
-                    <Button type="button" variant="outline" className="h-10 rounded-2xl border-slate-200 bg-white" onClick={captureUserLocation}>
-                      <MapPin className="h-4 w-4" />
-                      Use My Location
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" className="h-10 rounded-2xl border-slate-200 bg-white" onClick={() => void resolveAddressLocation()} disabled={resolvingAddress}>
+                        <MapPin className="h-4 w-4" />
+                        {resolvingAddress ? "Fetching..." : "Use Address"}
+                      </Button>
+                      <Button type="button" variant="outline" className="h-10 rounded-2xl border-slate-200 bg-white" onClick={captureUserLocation}>
+                        <MapPin className="h-4 w-4" />
+                        Use My Location
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Address</Label>
+                    <Textarea
+                      placeholder="Enter the patient address or landmark"
+                      className="min-h-[86px] rounded-2xl border-slate-200 bg-white"
+                      value={form.user_address}
+                      onChange={(event) => setForm((current) => ({ ...current, user_address: event.target.value }))}
+                    />
+                    <p className="text-xs text-slate-500">
+                      {resolvingAddress
+                        ? "Fetching coordinates from the typed address..."
+                        : locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
+                          ? "Coordinates ready from address or current location."
+                          : "Type an address and wait, or use the buttons to fetch coordinates."}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Search radius</Label>
+                      <Select value={form.search_radius_km} onValueChange={(value) => setForm((current) => ({ ...current, search_radius_km: value }))}>
+                        <SelectTrigger className="h-12 rounded-2xl border-slate-200 bg-white">
+                          <SelectValue placeholder="Choose search radius" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="5">5 km</SelectItem>
+                          <SelectItem value="10">10 km</SelectItem>
+                          <SelectItem value="20">20 km</SelectItem>
+                          <SelectItem value="50">50 km</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Coordinates</Label>
+                      <div className="flex h-12 items-center rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700">
+                        {locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
+                          ? `${locationState.latitude.toFixed(5)}, ${locationState.longitude.toFixed(5)}`
+                          : "Waiting for current location"}
+                      </div>
+                    </div>
                   </div>
                   <p className="text-sm text-slate-700">
                     {locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
@@ -485,14 +674,36 @@ export default function BookingPage() {
                     />
                   </div>
                 ) : null}
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className={`grid gap-3 ${form.duration_type === "daily" || form.duration_type === "monthly" ? "lg:grid-cols-3" : "sm:grid-cols-2"}`}>
                   <div className="space-y-2">
-                    <Label>Date</Label>
+                    <Label>{form.duration_type === "daily" || form.duration_type === "monthly" ? "Start Date" : "Date"}</Label>
                     <div className="relative">
                       <CalendarDays className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-                      <Input type="date" className="h-12 rounded-2xl border-slate-200 pl-10" value={form.date} onChange={update("date")} required />
+                      <Input
+                        type="date"
+                        min={todayDateValue}
+                        className="h-12 rounded-2xl border-slate-200 pl-10"
+                        value={form.date}
+                        onChange={update("date")}
+                        required
+                      />
                     </div>
                   </div>
+                  {form.duration_type === "daily" || form.duration_type === "monthly" ? (
+                    <div className="space-y-2">
+                      <Label>End Date</Label>
+                      <div className="relative">
+                        <CalendarDays className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          type="date"
+                          className="h-12 rounded-2xl border-slate-200 bg-slate-50 pl-10 text-slate-600"
+                          value={calculatedEndDate}
+                          readOnly
+                          tabIndex={-1}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="space-y-2">
                     <Label>Time</Label>
                     <div className="relative">
@@ -501,6 +712,10 @@ export default function BookingPage() {
                     </div>
                   </div>
                 </div>
+                {selectedDateIsPast ? <p className="text-sm text-rose-600">Booking date cannot be in the past.</p> : null}
+                {(form.duration_type === "daily" || form.duration_type === "monthly") && calculatedEndDate ? (
+                  <p className="text-sm text-slate-600">Service range: {form.date} to {calculatedEndDate}</p>
+                ) : null}
                 <div className="space-y-2">
                   <Label>Patient Notes</Label>
                   <Textarea
@@ -556,6 +771,9 @@ export default function BookingPage() {
                       <p className="mt-2">Service: {serviceLabels[form.service_type] ?? formatLabel(form.service_type)}</p>
                       <p>Condition: {(conditionLabels[form.patient_condition] ?? formatLabel(form.patient_condition)) || "Not selected"}</p>
                       <p>Duration: {durationSummary}</p>
+                      <p>
+                        Schedule: {form.date ? (calculatedEndDate && (form.duration_type === "daily" || form.duration_type === "monthly") ? `${form.date} to ${calculatedEndDate}` : form.date) : "Not selected"}
+                      </p>
                       <p className="font-semibold text-slate-950">Cost: ₹{amount.toLocaleString("en-IN")}</p>
                     </div>
                   </div>
@@ -574,6 +792,17 @@ export default function BookingPage() {
                     {paying ? "Processing payment..." : "Pay Now"}
                   </Button>
                 </div>
+                {bookingInlineMessage ? (
+                  <div
+                    className={`rounded-[20px] border px-4 py-4 text-sm leading-6 ${
+                      bookingInlineMessage.tone === "error"
+                        ? "border-rose-200 bg-rose-50 text-rose-800"
+                        : "border-cyan-200 bg-cyan-50 text-cyan-800"
+                    }`}
+                  >
+                    {bookingInlineMessage.text}
+                  </div>
+                ) : null}
               </form>
             </CardContent>
           </Card>

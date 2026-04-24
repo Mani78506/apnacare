@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, Depends, Header, HTTPException, WebSocketDisconnect
 from jose import JWTError
@@ -10,12 +11,21 @@ from app.models.caregiver import Caregiver
 from app.models.user import User
 from app.models.location import Location
 from app.models.review import Review
+from app.models.task import Task
 from app.services.auth_service import decode_access_token
 from app.services.document_service import serialize_document, sort_documents
 from app.services.websocket_manager import manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def serialize_utc_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
 
 def get_db():
     db = SessionLocal()
@@ -58,6 +68,7 @@ def serialize_public_caregiver(caregiver: Caregiver | None, caregiver_user: User
         "full_name": caregiver.full_name,
         "phone": caregiver.phone,
         "email": caregiver_user.email if caregiver_user else None,
+        "address": caregiver.address or caregiver.location,
         "gender": caregiver.gender,
         "experience": caregiver.experience,
         "skills": [item.strip() for item in (caregiver.skills or "").split(",") if item.strip()],
@@ -120,6 +131,7 @@ def get_tracking_details(
         else None
     )
     review = db.query(Review).filter(Review.booking_id == booking.id).first()
+    tasks = db.query(Task).filter(Task.booking_id == booking.id).order_by(Task.id.asc()).all()
 
     return {
         "booking": {
@@ -136,6 +148,10 @@ def get_tracking_details(
             "qr_code_path": booking.qr_code_path,
             "service_type": booking.service_type,
             "preferred_gender": booking.preferred_gender,
+            "user_address": booking.user_address,
+            "user_latitude": booking.user_latitude,
+            "user_longitude": booking.user_longitude,
+            "search_radius_km": booking.search_radius_km,
             "assigned_distance_km": booking.assigned_distance_km,
             "assignment_reason": booking.assignment_reason,
             "patient_name": booking.patient_name,
@@ -143,6 +159,16 @@ def get_tracking_details(
             "start_time": booking.start_time.isoformat() if booking.start_time else None,
             "end_time": booking.end_time.isoformat() if booking.end_time else None,
             "amount": booking.amount,
+            "tasks": [
+                {
+                    "id": task.id,
+                    "name": task.name,
+                    "completed": task.completed,
+                    "status": "completed" if task.completed else "pending",
+                    "completed_at": serialize_utc_timestamp(task.completed_at),
+                }
+                for task in tasks
+            ],
             "has_review": review is not None,
             "review": (
                 {
@@ -172,6 +198,9 @@ def get_eta(booking_id: int, db: Session = Depends(get_db)):
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.status == "pending" or not booking.caregiver_id:
+        return {"eta": "Waiting for caregiver assignment"}
 
     if booking.status == "arrived":
         return {"eta": "Arrived"}

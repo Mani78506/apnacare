@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -7,6 +9,25 @@ from app.services.task_service import ensure_default_tasks
 router = APIRouter(prefix="/task", tags=["Task"])
 
 
+def serialize_utc_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+def serialize_task(task: Task):
+    return {
+        "id": task.id,
+        "booking_id": task.booking_id,
+        "name": task.name,
+        "completed": task.completed,
+        "status": "completed" if task.completed else "pending",
+        "completed_at": serialize_utc_timestamp(task.completed_at),
+    }
+
+
 # ✅ 1. Create Default Tasks for a Booking
 @router.post("/create/{booking_id}")
 def create_tasks(booking_id: int, db: Session = Depends(get_db)):
@@ -14,7 +35,7 @@ def create_tasks(booking_id: int, db: Session = Depends(get_db)):
     if existing_tasks:
         return {
             "message": "Tasks already exist for this booking",
-            "tasks": [task.name for task in existing_tasks]
+            "tasks": [serialize_task(task) for task in existing_tasks]
         }
 
     try:
@@ -26,7 +47,7 @@ def create_tasks(booking_id: int, db: Session = Depends(get_db)):
 
     return {
         "message": "Tasks created successfully",
-        "tasks": [t.name for t in created_tasks]
+        "tasks": [serialize_task(t) for t in created_tasks]
     }
 
 
@@ -35,7 +56,7 @@ def create_tasks(booking_id: int, db: Session = Depends(get_db)):
 def get_tasks(booking_id: int, db: Session = Depends(get_db)):
     tasks = db.query(Task).filter(Task.booking_id == booking_id).all()
 
-    return tasks
+    return [serialize_task(task) for task in tasks]
 
 
 # ✅ 3. Complete a Task
@@ -47,11 +68,12 @@ def update_task(task_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task.completed = True
+    task.completed_at = task.completed_at or datetime.now(timezone.utc)
     db.commit()
 
     return {
         "message": "Task marked as completed",
-        "task_id": task_id
+        "task": serialize_task(task)
     }
 
 
@@ -62,6 +84,7 @@ def reset_tasks(booking_id: int, db: Session = Depends(get_db)):
 
     for task in tasks:
         task.completed = False
+        task.completed_at = None
 
     db.commit()
 
