@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Activity, ClipboardList, Lock, Mail, Radio, ShieldCheck } from "lucide-react";
 import { useCaregiverAuth } from "@/hooks/useCaregiverAuth";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,11 @@ export default function CaregiverLoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               required
             />
+          </div>
+          <div className="text-right">
+            <Link to="/caregiver/forgot-password" className="text-sm font-medium text-primary hover:underline">
+              Forgot password?
+            </Link>
           </div>
         </div>
         {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}

@@ -1,13 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException
+from jose import JWTError
 from passlib.exc import UnknownHashError
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
+from app.config import FRONTEND_URL
 from app.models.caregiver import Caregiver
 from app.models.user import User
-from app.schemas.user import UserCreate, UserLogin
-from app.services.auth_service import hash_password, verify_password, create_access_token
+from app.schemas.user import ForgotPasswordRequest, ResetPasswordRequest, UserCreate, UserLogin
+from app.services.auth_service import (
+    create_access_token,
+    create_password_reset_token,
+    decode_password_reset_token,
+    hash_password,
+    verify_password,
+)
 from app.services.assignment_service import validate_caregiver_gender, validate_coordinates
 from app.services.document_service import extract_registration_documents, replace_caregiver_documents
+from app.services.email_service import send_email
 
 router = APIRouter()
 
@@ -156,3 +165,53 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
             "caregiver_verified": caregiver.is_verified if caregiver else None,
         },
     }
+
+
+@router.post("/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    requested_role = (data.role or "").strip().lower()
+    if requested_role not in {"user", "caregiver"}:
+        raise HTTPException(status_code=400, detail="role must be either user or caregiver")
+
+    db_user = db.query(User).filter(User.email == data.email).first()
+    if not db_user or db_user.role != requested_role:
+        return {"message": "If the account exists, a password reset link has been sent."}
+
+    token = create_password_reset_token(db_user.email, db_user.role)
+    reset_url = f"{FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+    send_email(
+        db_user.email,
+        "Reset your ApnaCare password",
+        f"Use the following secure link to reset your ApnaCare password: {reset_url}",
+        recipient_name=db_user.name,
+        details={
+            "Role": "Caregiver" if db_user.role == "caregiver" else "Patient",
+            "Reset link": reset_url,
+            "Valid for": "30 minutes",
+        },
+    )
+    return {"message": "If the account exists, a password reset link has been sent."}
+
+
+@router.post("/reset-password")
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    if len(data.new_password.strip()) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+
+    try:
+        payload = decode_password_reset_token(data.token)
+    except JWTError as exc:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or expired") from exc
+
+    email = payload.get("sub")
+    role = payload.get("role")
+    if not email or role not in {"user", "caregiver"}:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or expired")
+
+    db_user = db.query(User).filter(User.email == email, User.role == role).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    db_user.password = hash_password(data.new_password.strip())
+    db.commit()
+    return {"message": "Password reset successful"}

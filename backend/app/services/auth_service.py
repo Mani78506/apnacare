@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import bcrypt
-from jose import jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
@@ -27,3 +27,20 @@ def create_access_token(data: dict):
 
 def decode_access_token(token: str):
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
+def create_password_reset_token(email: str, role: str):
+    to_encode = {
+        "sub": email,
+        "role": role,
+        "purpose": "password_reset",
+        "exp": datetime.utcnow() + timedelta(minutes=30),
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_password_reset_token(token: str):
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    if payload.get("purpose") != "password_reset":
+        raise JWTError("Invalid reset token purpose")
+    return payload

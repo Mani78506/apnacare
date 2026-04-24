@@ -377,6 +377,10 @@ export const authAPI = {
   }) => api.post("/auth/signup", data),
   login: (payload: { email: string; password: string; expected_role?: "user" | "caregiver" | "admin" }) =>
     api.post("/auth/login", payload),
+  forgotPassword: (payload: { email: string; role: "user" | "caregiver" }) =>
+    api.post<{ message: string }>("/auth/forgot-password", payload),
+  resetPassword: (payload: { token: string; new_password: string }) =>
+    api.post<{ message: string }>("/auth/reset-password", payload),
 };
 
 export const bookingAPI = {

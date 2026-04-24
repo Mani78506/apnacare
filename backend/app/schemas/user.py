@@ -30,3 +30,13 @@ class UserLogin(BaseModel):
     email: str
     password: str
     expected_role: str | None = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+    role: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str

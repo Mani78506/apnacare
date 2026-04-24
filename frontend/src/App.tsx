@@ -9,8 +9,11 @@ import TrackingPage from "@/pages/TrackingPage";
 import AdminDashboardPage from "@/pages/AdminDashboardPage";
 import AdminLoginPage from "@/pages/AdminLoginPage";
 import CaregiverLoginPage from "@/pages/CaregiverLoginPage";
+import CaregiverForgotPasswordPage from "@/pages/CaregiverForgotPasswordPage";
 import CaregiverDashboardPage from "@/pages/CaregiverDashboardPage";
 import CaregiverJobPage from "@/pages/CaregiverJobPage";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import AdminProtectedRoute from "@/components/AdminProtectedRoute";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import CaregiverProtectedRoute from "@/components/CaregiverProtectedRoute";
@@ -30,6 +33,8 @@ export default function App() {
             </PortalLoginRoute>
           }
         />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route
           path="/admin/login"
           element={
@@ -79,6 +84,7 @@ export default function App() {
             </PortalLoginRoute>
           }
         />
+        <Route path="/caregiver/forgot-password" element={<CaregiverForgotPasswordPage />} />
         <Route
           path="/caregiver/dashboard"
           element={
