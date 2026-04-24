@@ -51,11 +51,14 @@ def verify_faces(profile_bytes: bytes, selfie_bytes: bytes) -> dict:
         return payload
     except Exception as exc:
         logger.exception("Face verification crashed")
+        message = str(exc)
+        if "No module named 'deepface'" in message or "No module named 'tensorflow'" in message:
+            message = "Face verification service is unavailable in this environment. Admin review required."
         return {
             "verified": False,
             "distance": None,
             "threshold": None,
-            "message": f"Face verification failed: {exc}",
+            "message": f"Face verification failed: {message}",
         }
     finally:
         for path in (profile_path, selfie_path):
