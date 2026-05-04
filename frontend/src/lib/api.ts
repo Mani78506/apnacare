@@ -89,6 +89,13 @@ export interface BookingTask {
   completed_at?: string | null;
 }
 
+export interface CareTaskOption {
+  value: string;
+  label: string;
+}
+
+export type CareOptionsResponse = Record<string, CareTaskOption[]>;
+
 export interface PublicCaregiverProfile {
   id: number;
   full_name: string | null;
@@ -114,6 +121,9 @@ export interface BookingSummary {
   patient_name?: string | null;
   patient_age?: number | null;
   patient_condition?: string | null;
+  care_type?: string | null;
+  selected_care_tasks?: string[] | null;
+  custom_care_details?: string | null;
   preferred_gender?: string | null;
   user_address?: string | null;
   user_latitude?: number | null;
@@ -177,8 +187,54 @@ export interface CaregiverDocumentSummary {
   id: number;
   document_type: "profile" | "id" | "certificate" | string;
   file_name: string;
+  content_type?: string | null;
   uploaded_at?: string | null;
 }
+
+export interface UserProfile {
+  id: number;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  role: "user";
+  location?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  created_at?: string | null;
+}
+
+export interface CaregiverProfile {
+  id: number;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  role: "caregiver";
+  location?: string | null;
+  address?: string | null;
+  gender?: "male" | "female" | "other" | string | null;
+  skills: string[];
+  experience?: number | null;
+  rating?: number | null;
+  is_available: boolean;
+  status: string;
+  is_verified: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
+  documents: CaregiverDocumentSummary[];
+}
+
+export type ProfileUpdatePayload = {
+  name?: string;
+  phone?: string;
+  location?: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  gender?: string;
+  skills?: string[];
+  experience?: number | null;
+};
 
 export interface AdminMetricOverview {
   total_bookings: number;
@@ -432,6 +488,9 @@ export const bookingAPI = {
     time: string;
     service_type?: string;
     notes?: string;
+    care_type?: string;
+    selected_care_tasks?: string[];
+    custom_care_details?: string;
     patient_condition?: string;
     preferred_gender?: "any" | "male" | "female";
     user_address?: string;
@@ -460,6 +519,7 @@ export const bookingAPI = {
       throw error;
     }
   },
+  getCareOptions: () => api.get<CareOptionsResponse>("/booking/care-options"),
   getLatest: () => api.get<{ booking: BookingSummary | null }>("/booking/latest", { headers: withBearer(getCaregiverToken()) }),
   getMine: () => api.get<{ bookings: BookingSummary[] }>("/booking/mine", { headers: withBearer(getUserToken()) }),
   verifyOtp: (payload: { booking_id: number; entered_otp: string }) =>
@@ -488,9 +548,10 @@ export const trackingAPI = {
   getETA: (bookingId: string) => api.get(`/tracking/eta?booking_id=${bookingId}`, { headers: withBearer(getUserToken()) }),
   getDetails: (bookingId: string) =>
     api.get<{
-      booking: {
-        id: number;
-        status: string;
+        booking: {
+          id: number;
+          caregiver_id?: number | null;
+          status: string;
         payment_method?: string | null;
         payment_status?: string | null;
         payment_collected_method?: string | null;
@@ -501,8 +562,14 @@ export const trackingAPI = {
         manual_override?: boolean;
         qr_code_path?: string | null;
         service_type?: string | null;
+        care_type?: string | null;
+        selected_care_tasks?: string[] | null;
+        custom_care_details?: string | null;
+        notes?: string | null;
         preferred_gender?: string | null;
         user_address?: string | null;
+        user_latitude?: number | null;
+        user_longitude?: number | null;
         search_radius_km?: number | null;
         assigned_distance_km?: number | null;
         assignment_reason?: string | null;
@@ -547,6 +614,15 @@ export const caregiverAPI = {
     api.get<{ notifications: AppNotification[] }>("/caregiver/notifications", { headers: withBearer(getCaregiverToken()) }),
   markNotificationRead: (notificationId: number) =>
     api.post(`/caregiver/notifications/${notificationId}/read`, {}, { headers: withBearer(getCaregiverToken()) }),
+};
+
+export const profileAPI = {
+  getUserProfile: () => api.get<UserProfile>("/profile/me", { headers: withBearer(getUserToken()) }),
+  updateUserProfile: (payload: ProfileUpdatePayload) =>
+    api.put<UserProfile>("/profile/me", payload, { headers: withBearer(getUserToken()) }),
+  getCaregiverProfile: () => api.get<CaregiverProfile>("/profile/me", { headers: withBearer(getCaregiverToken()) }),
+  updateCaregiverProfile: (payload: ProfileUpdatePayload) =>
+    api.put<CaregiverProfile>("/profile/me", payload, { headers: withBearer(getCaregiverToken()) }),
 };
 
 export const adminAPI = {

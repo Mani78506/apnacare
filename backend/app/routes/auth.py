@@ -84,6 +84,7 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
         email=user.email,
         password=hash_password(user.password),
         role=user.role,
+        location=None if user.role == "caregiver" else user.location,
         address=None if user.role == "caregiver" else caregiver_address,
         latitude=None if user.role == "caregiver" else caregiver_latitude,
         longitude=None if user.role == "caregiver" else caregiver_longitude,

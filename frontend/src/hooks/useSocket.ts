@@ -43,21 +43,26 @@ export function useSocket(bookingId: string | null) {
           if (data.type === "pong") {
             return;
           }
-          if (typeof data.lat === "number" && typeof data.lng === "number") {
+          const hasLocation =
+            (data.type === "location_update" || data.type === undefined || data.type === "status") &&
+            typeof data.lat === "number" &&
+            typeof data.lng === "number";
+
+          if (hasLocation) {
             setCaregiverLocation({ lat: data.lat, lng: data.lng });
           } else if (data.status === "pending" || data.status === "cancelled") {
             setCaregiverLocation(null);
           }
-          if (data.status) {
+          if (typeof data.status === "string") {
             setBookingStatus(data.status);
             const messages: Record<string, string> = {
-              assigned: "Caregiver has been assigned.",
-              accepted: "Caregiver accepted the booking.",
-              on_the_way: "Caregiver is on the way.",
-              arrived: "Caregiver has arrived.",
-              started: "Care has started.",
-              completed: "Care completed.",
-              rejected: "Caregiver rejected the booking.",
+              assigned: "Caregiver has been assigned",
+              accepted: "Caregiver accepted the booking",
+              on_the_way: "Caregiver is on the way",
+              arrived: "Caregiver arrived",
+              started: "Service started",
+              completed: "Service completed",
+              rejected: "Caregiver rejected the booking",
             };
             if (messages[data.status]) {
               toast.success(messages[data.status]);

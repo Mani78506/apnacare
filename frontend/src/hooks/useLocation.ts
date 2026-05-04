@@ -12,57 +12,58 @@ export function useLocation({ caregiverId, bookingId, enabled }: UseLocationOpti
   const { setLiveLocation } = useCaregiverStore();
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
-  const intervalRef = useRef<number | null>(null);
+  const watchRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!enabled || !caregiverId || !bookingId) {
       setIsSharing(false);
-      if (intervalRef.current) {
-        window.clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (watchRef.current !== null) {
+        navigator.geolocation.clearWatch(watchRef.current);
+        watchRef.current = null;
       }
       return;
     }
 
-    const pushLocation = () => {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const coords = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
+    if (!navigator.geolocation) {
+      setIsSharing(false);
+      setPermissionError("Location permission denied. Please enable GPS/location access.");
+      return;
+    }
 
-          setPermissionError(null);
-          setLiveLocation(coords);
-          setIsSharing(true);
+    watchRef.current = navigator.geolocation.watchPosition(
+      async (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
 
-          try {
-            await caregiverAPI.updateLocation({
-              caregiver_id: caregiverId,
-              booking_id: bookingId,
-              lat: coords.lat,
-              lng: coords.lng,
-            });
-          } catch (error: any) {
-            setIsSharing(false);
-            setPermissionError(error.response?.data?.detail || "Unable to sync caregiver location.");
-          }
-        },
-        (error) => {
+        setPermissionError(null);
+        setLiveLocation(coords);
+        setIsSharing(true);
+
+        try {
+          await caregiverAPI.updateLocation({
+            caregiver_id: caregiverId,
+            booking_id: bookingId,
+            lat: coords.lat,
+            lng: coords.lng,
+          });
+        } catch (error: any) {
           setIsSharing(false);
-          setPermissionError(error.message || "Location permission denied.");
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
-      );
-    };
-
-    pushLocation();
-    intervalRef.current = window.setInterval(pushLocation, 5000);
+          setPermissionError(error.response?.data?.detail || "Unable to sync caregiver location.");
+        }
+      },
+      () => {
+        setIsSharing(false);
+        setPermissionError("Location permission denied. Please enable GPS/location access.");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+    );
 
     return () => {
-      if (intervalRef.current) {
-        window.clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (watchRef.current !== null) {
+        navigator.geolocation.clearWatch(watchRef.current);
+        watchRef.current = null;
       }
     };
   }, [bookingId, caregiverId, enabled, setLiveLocation]);

@@ -41,6 +41,12 @@ export default function Sidebar({
       icon: Route,
       active: location.pathname.startsWith("/caregiver/job/"),
     },
+    {
+      to: "/caregiver/profile",
+      label: "My Profile",
+      icon: ShieldCheck,
+      active: location.pathname === "/caregiver/profile",
+    },
   ];
 
   const dashboardPanels = [

@@ -1,7 +1,7 @@
 import { Component, Suspense, lazy, type ReactNode } from "react";
 import { MapPin, ShieldCheck } from "lucide-react";
 
-const TrackingMap = lazy(() => import("@/components/TrackingMap"));
+const LiveTrackingMap = lazy(() => import("@/components/LiveTrackingMap"));
 
 interface Coordinates {
   lat: number;
@@ -11,6 +11,7 @@ interface Coordinates {
 interface Props {
   caregiverLocation: Coordinates | null;
   userLocation: Coordinates | null;
+  status?: string;
 }
 
 class TrackingMapErrorBoundary extends Component<
@@ -75,11 +76,11 @@ function TrackingMapFallback({ caregiverLocation, userLocation }: Props) {
   );
 }
 
-export default function TrackingMapPanel({ caregiverLocation, userLocation }: Props) {
+export default function TrackingMapPanel({ caregiverLocation, userLocation, status = "assigned" }: Props) {
   return (
     <TrackingMapErrorBoundary caregiverLocation={caregiverLocation} userLocation={userLocation}>
       <Suspense fallback={<TrackingMapFallback caregiverLocation={caregiverLocation} userLocation={userLocation} />}>
-        <TrackingMap caregiverLocation={caregiverLocation} userLocation={userLocation ?? undefined} />
+        <LiveTrackingMap caregiverLocation={caregiverLocation} userLocation={userLocation} status={status} />
       </Suspense>
     </TrackingMapErrorBoundary>
   );

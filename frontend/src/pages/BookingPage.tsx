@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { bookingAPI, locationAPI, paymentAPI } from "@/lib/api";
+import { bookingAPI, CareOptionsResponse, locationAPI, paymentAPI } from "@/lib/api";
 import { useStore } from "@/store/useStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CalendarDays, Clock, HeartPulse, MapPin, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
@@ -38,6 +39,39 @@ const conditionLabels: Record<string, string> = {
   elderly_care: "Old age support",
   patient_care: "General patient",
   bedridden: "Bedridden",
+};
+
+const careTypeLabels: Record<string, string> = {
+  elderly_care: "Elderly Care",
+  patient_care: "Patient Care",
+  bedridden_care: "Bedridden Care",
+};
+
+const fallbackCareOptions: CareOptionsResponse = {
+  elderly_care: [
+    { value: "medicine_reminder", label: "Medicine Reminder" },
+    { value: "walking_support", label: "Walking Support" },
+    { value: "meal_assistance", label: "Meal Assistance" },
+    { value: "companionship", label: "Companionship" },
+    { value: "bathroom_assistance", label: "Bathroom Assistance" },
+    { value: "other", label: "Other" },
+  ],
+  patient_care: [
+    { value: "vitals_check", label: "Vitals Check" },
+    { value: "injection_support", label: "Injection Support" },
+    { value: "wound_care", label: "Wound Care" },
+    { value: "medicine_assistance", label: "Medicine Assistance" },
+    { value: "doctor_followup", label: "Doctor Follow-up" },
+    { value: "other", label: "Other" },
+  ],
+  bedridden_care: [
+    { value: "position_change", label: "Position Change" },
+    { value: "bedsore_prevention", label: "Bedsore Prevention" },
+    { value: "feeding_support", label: "Feeding Support" },
+    { value: "hygiene_support", label: "Hygiene Support" },
+    { value: "mobility_assistance", label: "Mobility Assistance" },
+    { value: "other", label: "Other" },
+  ],
 };
 
 const formatDateInputValue = (date: Date) => {
@@ -88,6 +122,9 @@ export default function BookingPage() {
     time: "",
     service_type: "elder_care",
     patient_condition: "",
+    care_type: "elderly_care",
+    selected_care_tasks: [] as string[],
+    custom_care_details: "",
     preferred_gender: "any",
     user_address: "",
     search_radius_km: "10",
@@ -99,6 +136,7 @@ export default function BookingPage() {
     notes: "",
   });
   const [amount, setAmount] = useState(0);
+  const [careOptions, setCareOptions] = useState<CareOptionsResponse>(fallbackCareOptions);
   const [prescription, setPrescription] = useState<{
     file_name: string;
     content_type?: string;
@@ -112,12 +150,40 @@ export default function BookingPage() {
   }>({ status: "idle", latitude: null, longitude: null });
   const [lastResolvedAddress, setLastResolvedAddress] = useState("");
   const todayDateValue = useMemo(() => formatDateInputValue(new Date()), []);
+  const currentCareOptions = careOptions[form.care_type] ?? [];
+  const selectedCareLabels = currentCareOptions
+    .filter((option) => form.selected_care_tasks.includes(option.value) && option.value !== "other")
+    .map((option) => option.label);
+  const careSelectionWarning = !form.selected_care_tasks.length && !form.notes.trim();
 
   const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
 
   const updateNotes = (e: React.ChangeEvent<HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, notes: e.target.value }));
+
+  const toggleCareTask = (task: string, checked: boolean) => {
+    setForm((current) => ({
+      ...current,
+      selected_care_tasks: checked
+        ? [...current.selected_care_tasks, task]
+        : current.selected_care_tasks.filter((item) => item !== task),
+      custom_care_details: !checked && task === "other" ? "" : current.custom_care_details,
+    }));
+  };
+
+  useEffect(() => {
+    const loadCareOptions = async () => {
+      try {
+        const response = await bookingAPI.getCareOptions();
+        setCareOptions(response.data);
+      } catch {
+        setCareOptions(fallbackCareOptions);
+      }
+    };
+
+    void loadCareOptions();
+  }, []);
 
   useEffect(() => {
     const sanitize = (value: string) => {
@@ -217,6 +283,9 @@ export default function BookingPage() {
         time: form.time,
         service_type: form.service_type,
         patient_condition: form.patient_condition,
+        care_type: form.care_type,
+        selected_care_tasks: form.selected_care_tasks,
+        custom_care_details: form.custom_care_details,
         preferred_gender: form.preferred_gender as "any" | "male" | "female",
         user_address: form.user_address || undefined,
         user_latitude: locationState.latitude ?? undefined,
@@ -323,11 +392,11 @@ export default function BookingPage() {
           ...current,
           user_address: current.user_address || "Current location selected",
         }));
-        toast.success("Location captured");
+        toast.success("Location captured successfully");
       },
       () => {
         setLocationState({ status: "error", latitude: null, longitude: null });
-        toast.error("Unable to capture your location.");
+        toast.error("Location permission denied. Please enable GPS/location access.");
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
     );
@@ -570,7 +639,7 @@ export default function BookingPage() {
                       </Button>
                       <Button type="button" variant="outline" className="h-10 rounded-2xl border-slate-200 bg-white" onClick={captureUserLocation}>
                         <MapPin className="h-4 w-4" />
-                        Use My Location
+                        Use My Current Location
                       </Button>
                     </div>
                   </div>
@@ -586,7 +655,7 @@ export default function BookingPage() {
                       {resolvingAddress
                         ? "Fetching coordinates from the typed address..."
                         : locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
-                          ? "Coordinates ready from address or current location."
+                          ? "Location captured successfully"
                           : "Type an address and wait, or use the buttons to fetch coordinates."}
                     </p>
                   </div>
@@ -616,7 +685,7 @@ export default function BookingPage() {
                   </div>
                   <p className="text-sm text-slate-700">
                     {locationState.status === "captured" && locationState.latitude !== null && locationState.longitude !== null
-                      ? `Location captured (${locationState.latitude.toFixed(4)}, ${locationState.longitude.toFixed(4)})`
+                      ? `Location captured successfully (${locationState.latitude.toFixed(4)}, ${locationState.longitude.toFixed(4)})`
                       : "Location not provided"}
                   </p>
                 </div>
@@ -716,16 +785,80 @@ export default function BookingPage() {
                 {(form.duration_type === "daily" || form.duration_type === "monthly") && calculatedEndDate ? (
                   <p className="text-sm text-slate-600">Service range: {form.date} to {calculatedEndDate}</p>
                 ) : null}
+                <div className="space-y-4 rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Care Type</Label>
+                      <Select
+                        value={form.care_type}
+                        onValueChange={(value) =>
+                          setForm((current) => ({
+                            ...current,
+                            care_type: value,
+                            selected_care_tasks: [],
+                            custom_care_details: "",
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="h-12 rounded-2xl border-slate-200 bg-white">
+                          <SelectValue placeholder="Select care type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="elderly_care">Elderly Care</SelectItem>
+                          <SelectItem value="patient_care">Patient Care</SelectItem>
+                          <SelectItem value="bedridden_care">Bedridden Care</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="rounded-2xl border border-white/80 bg-white px-4 py-3 text-sm text-slate-600">
+                      <p className="font-semibold text-slate-950">Care requirements</p>
+                      <p className="mt-1">Select the specific work the caregiver should see as the visit checklist.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {currentCareOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-800"
+                      >
+                        <Checkbox
+                          checked={form.selected_care_tasks.includes(option.value)}
+                          onCheckedChange={(checked) => toggleCareTask(option.value, Boolean(checked))}
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+
+                  {form.selected_care_tasks.includes("other") ? (
+                    <div className="space-y-2">
+                      <Label>Please describe the required care</Label>
+                      <Textarea
+                        className="min-h-[90px] rounded-2xl border-slate-200 bg-white"
+                        placeholder="Example: Needs help climbing stairs"
+                        value={form.custom_care_details}
+                        onChange={(event) => setForm((current) => ({ ...current, custom_care_details: event.target.value }))}
+                      />
+                    </div>
+                  ) : null}
+
+                  {careSelectionWarning ? (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      Please select at least one care requirement or choose Other.
+                    </div>
+                  ) : null}
+                </div>
                 <div className="space-y-2">
-                  <Label>Patient Notes</Label>
+                  <Label>Additional Patient Notes</Label>
                   <Textarea
-                    placeholder="Write each care instruction clearly. Example: Give BP tablet at 8 AM. Check sugar after breakfast. Assist walking for 10 minutes."
+                    placeholder="Add extra instructions, medicine timing, or family preferences."
                     className="min-h-[96px] rounded-2xl border-slate-200"
                     value={form.notes}
                     onChange={updateNotes}
                   />
                   <p className="text-xs text-slate-500">
-                    These instructions will be shown to the caregiver and used as the visit task checklist.
+                    Kept for existing bookings and shown to the caregiver along with selected care requirements.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -770,6 +903,12 @@ export default function BookingPage() {
                       <p className="font-semibold text-slate-950">Booking summary</p>
                       <p className="mt-2">Service: {serviceLabels[form.service_type] ?? formatLabel(form.service_type)}</p>
                       <p>Condition: {(conditionLabels[form.patient_condition] ?? formatLabel(form.patient_condition)) || "Not selected"}</p>
+                      <p>Care type: {careTypeLabels[form.care_type] ?? formatLabel(form.care_type)}</p>
+                      <p>Care tasks: {selectedCareLabels.length ? selectedCareLabels.join(", ") : "Not selected"}</p>
+                      {form.selected_care_tasks.includes("other") ? (
+                        <p>Custom care: {form.custom_care_details.trim() || "Not described"}</p>
+                      ) : null}
+                      <p>Additional notes: {form.notes.trim() || "None"}</p>
                       <p>Duration: {durationSummary}</p>
                       <p>
                         Schedule: {form.date ? (calculatedEndDate && (form.duration_type === "daily" || form.duration_type === "monthly") ? `${form.date} to ${calculatedEndDate}` : form.date) : "Not selected"}

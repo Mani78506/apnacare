@@ -28,7 +28,7 @@ from app.services.face_verification_service import verify_faces
 from app.services.geocoding_service import resolve_address_coordinates
 from app.services.notification_service import notify_user
 from app.services.pricing_service import calculate_amount, calculate_booking_end_time
-from app.services.task_service import ensure_default_tasks
+from app.services.task_service import CARE_OPTIONS, build_care_notes, ensure_default_tasks
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -94,6 +94,9 @@ def serialize_booking(
         "assigned_distance_km": booking.assigned_distance_km,
         "assignment_reason": booking.assignment_reason,
         "service_type": booking.service_type,
+        "care_type": booking.care_type,
+        "selected_care_tasks": booking.selected_care_tasks or [],
+        "custom_care_details": booking.custom_care_details,
         "notes": booking.notes,
         "duration_type": booking.duration_type,
         "hours": booking.hours,
@@ -186,11 +189,23 @@ def create_booking(
         ),
         geocode_failure_message="Unable to resolve coordinates for the patient address",
     )
+    selected_care_tasks = [
+        task
+        for task in (data.selected_care_tasks or [])
+        if isinstance(task, str) and task.strip()
+    ]
+    custom_care_details = (data.custom_care_details or "").strip() or None
+    notes = data.notes.strip() if data.notes else ""
+    if not notes:
+        notes = build_care_notes(data.care_type, selected_care_tasks, custom_care_details)
 
     booking = Booking(
         user_id=user_id,
         service_type=data.service_type,
-        notes=data.notes,
+        care_type=data.care_type,
+        selected_care_tasks=selected_care_tasks,
+        custom_care_details=custom_care_details,
+        notes=notes,
         duration_type=data.duration_type,
         hours=data.hours,
         days=data.days,
@@ -323,6 +338,10 @@ def create_booking(
         "qr_code_path": booking.qr_code_path,
         "service_type": booking.service_type,
         "patient_condition": booking.patient_condition,
+        "care_type": booking.care_type,
+        "selected_care_tasks": booking.selected_care_tasks or [],
+        "custom_care_details": booking.custom_care_details,
+        "notes": booking.notes,
         "duration_type": booking.duration_type,
         "hours": booking.hours,
         "days": booking.days,
@@ -361,6 +380,11 @@ def create_booking(
             include_security=True,
         ),
     }
+
+
+@router.get("/care-options")
+def get_care_options():
+    return CARE_OPTIONS
 
 
 @router.post("/reject/{booking_id}")

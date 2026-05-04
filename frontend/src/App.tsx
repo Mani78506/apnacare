@@ -12,8 +12,10 @@ import CaregiverLoginPage from "@/pages/CaregiverLoginPage";
 import CaregiverForgotPasswordPage from "@/pages/CaregiverForgotPasswordPage";
 import CaregiverDashboardPage from "@/pages/CaregiverDashboardPage";
 import CaregiverJobPage from "@/pages/CaregiverJobPage";
+import CaregiverProfilePage from "@/pages/CaregiverProfilePage";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import UserProfilePage from "@/pages/UserProfilePage";
 import AdminProtectedRoute from "@/components/AdminProtectedRoute";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import CaregiverProtectedRoute from "@/components/CaregiverProtectedRoute";
@@ -69,6 +71,14 @@ export default function App() {
           }
         />
         <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <UserProfilePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/tracking/:bookingId"
           element={
             <ProtectedRoute>
@@ -98,6 +108,14 @@ export default function App() {
           element={
             <CaregiverProtectedRoute>
               <CaregiverJobPage />
+            </CaregiverProtectedRoute>
+          }
+        />
+        <Route
+          path="/caregiver/profile"
+          element={
+            <CaregiverProtectedRoute>
+              <CaregiverProfilePage />
             </CaregiverProtectedRoute>
           }
         />

@@ -31,6 +31,31 @@ const actionConfig: Record<string, Array<{ label: string; status: string; tone: 
   ],
 };
 
+const careTypeLabels: Record<string, string> = {
+  elderly_care: "Elderly Care",
+  patient_care: "Patient Care",
+  bedridden_care: "Bedridden Care",
+};
+
+const careTaskLabels: Record<string, string> = {
+  medicine_reminder: "Medicine Reminder",
+  walking_support: "Walking Support",
+  meal_assistance: "Meal Assistance",
+  companionship: "Companionship",
+  bathroom_assistance: "Bathroom Assistance",
+  vitals_check: "Vitals Check",
+  injection_support: "Injection Support",
+  wound_care: "Wound Care",
+  medicine_assistance: "Medicine Assistance",
+  doctor_followup: "Doctor Follow-up",
+  position_change: "Position Change",
+  bedsore_prevention: "Bedsore Prevention",
+  feeding_support: "Feeding Support",
+  hygiene_support: "Hygiene Support",
+  mobility_assistance: "Mobility Assistance",
+  other: "Other",
+};
+
 interface TaskItem {
   id: number;
   task_name?: string;
@@ -492,7 +517,7 @@ export default function CaregiverJobPage() {
             {error && <div className="rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
             {permissionError && (
               <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Geolocation issue: {permissionError}
+                {permissionError}
               </div>
             )}
 
@@ -545,7 +570,7 @@ export default function CaregiverJobPage() {
                         </p>
                       </div>
                       <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-300">
-                        Coordinates are pushed to ApnaCare every 5 seconds while this page is open.
+                        Coordinates are pushed to ApnaCare whenever your GPS position changes while this page is open.
                       </div>
                     </div>
                   </div>
@@ -566,7 +591,27 @@ export default function CaregiverJobPage() {
                         <p className="mt-2 text-sm text-slate-200">{formatLabel(booking.patient_condition) || "Not specified"}</p>
                       </div>
                       <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Instructions and medicines</p>
+                        <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Care type</p>
+                        <p className="mt-2 text-sm text-slate-200">
+                          {booking.care_type ? careTypeLabels[booking.care_type] ?? formatLabel(booking.care_type) : "Not specified"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                        <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Care requirements</p>
+                        <p className="mt-2 text-sm text-slate-200">
+                          {booking.selected_care_tasks?.length
+                            ? booking.selected_care_tasks.map((task) => careTaskLabels[task] ?? formatLabel(task)).join(", ")
+                            : "No structured care requirements selected."}
+                        </p>
+                      </div>
+                      {booking.custom_care_details?.trim() ? (
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                          <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Custom care details</p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">{booking.custom_care_details}</p>
+                        </div>
+                      ) : null}
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                        <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Additional patient notes</p>
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">
                           {booking.notes?.trim() || "No special medicine or care instructions were added by the patient."}
                         </p>

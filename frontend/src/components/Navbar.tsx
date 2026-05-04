@@ -52,6 +52,9 @@ export default function Navbar() {
                   <Link to="/booking" className="text-slate-500 transition-colors hover:text-slate-950">
                     Book
                   </Link>
+                  <Link to="/profile" className="text-slate-500 transition-colors hover:text-slate-950">
+                    My Profile
+                  </Link>
                 </>
               )}
               <Button variant="ghost" size="sm" onClick={logout}>
@@ -94,6 +97,9 @@ export default function Navbar() {
                   </Link>
                   <Link to="/booking" onClick={() => setOpen(false)} className="block py-2 text-slate-600">
                     Book
+                  </Link>
+                  <Link to="/profile" onClick={() => setOpen(false)} className="block py-2 text-slate-600">
+                    My Profile
                   </Link>
                 </>
               )}

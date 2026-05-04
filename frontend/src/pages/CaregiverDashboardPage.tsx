@@ -143,6 +143,39 @@ export default function CaregiverDashboardPage() {
     }
   };
 
+  const updateCurrentLocation = async () => {
+    if (!profile?.id) return;
+    if (!navigator.geolocation) {
+      setError("Location permission denied. Please enable GPS/location access.");
+      return;
+    }
+
+    setBusy("current-location");
+    setError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          await caregiverAPI.updateProfileLocation({
+            caregiver_id: profile.id,
+            address: profile.address || profile.location || "Current location",
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+          await loadDashboard(true);
+        } catch (err: any) {
+          setError(err.response?.data?.detail || "Unable to update current location.");
+        } finally {
+          setBusy(null);
+        }
+      },
+      () => {
+        setError("Location permission denied. Please enable GPS/location access.");
+        setBusy(null);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  };
+
   const markRead = async (id: number) => {
     setBusy(`notification-${id}`);
     try {
@@ -210,8 +243,20 @@ export default function CaregiverDashboardPage() {
                   >
                     {refreshing ? "Syncing..." : "Refresh"}
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    onClick={() => void updateCurrentLocation()}
+                    disabled={busy === "current-location" || !profile?.id}
+                  >
+                    <MapPinned className="h-4 w-4" />
+                    {busy === "current-location" ? "Updating..." : "Update My Current Location"}
+                  </Button>
                 </div>
               </div>
+              <p className="mt-4 text-sm text-slate-600">
+                Current coordinates: {profile?.latitude != null && profile?.longitude != null ? `${profile.latitude.toFixed(5)}, ${profile.longitude.toFixed(5)}` : "Not shared"}
+              </p>
             </section>
 
             <section className="grid gap-4 xl:grid-cols-4">

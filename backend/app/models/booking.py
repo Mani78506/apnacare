@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, LargeBinary, String
 
 from app.database import Base
 
@@ -11,6 +11,9 @@ class Booking(Base):
     caregiver_id = Column(Integer, ForeignKey("caregivers.id"))
     service_type = Column(String)
     notes = Column(String)
+    care_type = Column(String, nullable=True)
+    selected_care_tasks = Column(JSON, nullable=True)
+    custom_care_details = Column(String, nullable=True)
     patient_id = Column(Integer)
     patient_name = Column(String)
     patient_age = Column(Integer)

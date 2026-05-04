@@ -1,4 +1,5 @@
 import { Bell, LogOut, MapPinned, Menu } from "lucide-react";
+import { Link } from "react-router-dom";
 
 interface NavbarProps {
   title: string;
@@ -30,6 +31,12 @@ export default function CaregiverNavbar({ title, subtitle, onMenuClick, onLogout
             <MapPinned className="h-4 w-4" />
             Live operations
           </div>
+          <Link
+            to="/caregiver/profile"
+            className="hidden h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 md:inline-flex"
+          >
+            My Profile
+          </Link>
           <button type="button" className="hidden h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 md:inline-flex">
             <Bell className="h-4 w-4" />
           </button>

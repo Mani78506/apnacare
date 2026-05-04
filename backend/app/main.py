@@ -21,7 +21,7 @@ from app.models.caregiver import Caregiver
 from app.models.document import Document
 from app.models.booking import Booking
 from app.models.user import User
-from app.routes import admin, auth, booking, caregiver, location_lookup, onboarding, tracking
+from app.routes import admin, auth, booking, caregiver, location_lookup, onboarding, profile, tracking
 from app.routes import task, payment
 from app.services.pricing_service import calculate_amount
 
@@ -63,6 +63,12 @@ def ensure_booking_columns() -> None:
         statements.append("ALTER TABLE bookings ADD COLUMN service_type VARCHAR")
     if "notes" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN notes VARCHAR")
+    if "care_type" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN care_type VARCHAR")
+    if "selected_care_tasks" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN selected_care_tasks JSON")
+    if "custom_care_details" not in existing_columns:
+        statements.append("ALTER TABLE bookings ADD COLUMN custom_care_details VARCHAR")
     if "duration_type" not in existing_columns:
         statements.append("ALTER TABLE bookings ADD COLUMN duration_type VARCHAR DEFAULT 'hourly'")
     if "hours" not in existing_columns:
@@ -131,12 +137,16 @@ def ensure_user_columns() -> None:
     existing_columns = {column["name"] for column in inspector.get_columns("users")}
     statements: list[str] = []
 
+    if "location" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN location VARCHAR")
     if "address" not in existing_columns:
         statements.append("ALTER TABLE users ADD COLUMN address VARCHAR")
     if "latitude" not in existing_columns:
         statements.append("ALTER TABLE users ADD COLUMN latitude FLOAT")
     if "longitude" not in existing_columns:
         statements.append("ALTER TABLE users ADD COLUMN longitude FLOAT")
+    if "created_at" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN created_at TIMESTAMP")
 
     if not statements:
         return
@@ -421,6 +431,7 @@ app.include_router(tracking.router, prefix="/tracking", tags=["Tracking"])
 app.include_router(task.router)
 app.include_router(payment.router)
 app.include_router(admin.router)
+app.include_router(profile.router, prefix="/profile", tags=["Profile"])
 
 
 

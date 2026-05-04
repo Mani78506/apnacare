@@ -19,6 +19,9 @@ class BookingCreate(BaseModel):
     user_latitude: float | None = None
     user_longitude: float | None = None
     search_radius_km: float = 10
+    care_type: str | None = None
+    selected_care_tasks: list[str] | None = None
+    custom_care_details: str | None = None
     notes: str = ""
     duration_type: str = "hourly"
     hours: int | None = 1

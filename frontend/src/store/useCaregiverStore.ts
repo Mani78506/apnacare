@@ -19,6 +19,9 @@ export interface BookingSummary {
   patient_name?: string | null;
   patient_age?: number | null;
   patient_condition?: string | null;
+  care_type?: string | null;
+  selected_care_tasks?: string[] | null;
+  custom_care_details?: string | null;
   status: string;
   payment_method?: string | null;
   payment_status?: string | null;
