@@ -105,10 +105,10 @@ def serialize_booking(
     }
 
 
-def get_latest_location(db: Session, caregiver_id: int):
+def get_latest_location(db: Session, booking_id: int):
     latest = (
         db.query(Location)
-        .filter(Location.caregiver_id == caregiver_id)
+        .filter(Location.booking_id == booking_id)
         .order_by(Location.timestamp.desc())
         .first()
     )
@@ -483,7 +483,7 @@ def get_live_jobs(
         results.append(
             {
                 **serialize_booking(booking, patient, caregiver, caregiver_user),
-                "live_location": get_latest_location(db, caregiver.id) if caregiver else None,
+                "live_location": get_latest_location(db, booking.id) if caregiver else None,
             }
         )
     return {"jobs": results}

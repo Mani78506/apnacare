@@ -154,8 +154,24 @@ def update_location(
     if data.caregiver_id != caregiver.id:
         raise HTTPException(status_code=403, detail="Location update does not match signed-in caregiver")
 
+    if not data.booking_id:
+        raise HTTPException(status_code=400, detail="booking_id is required for live location tracking")
+
+    booking = (
+        db.query(Booking)
+        .filter(
+            Booking.id == data.booking_id,
+            Booking.caregiver_id == caregiver.id,
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+        )
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail="Active booking not found for live location tracking")
+
     location = Location(
         caregiver_id=caregiver.id,
+        booking_id=booking.id,
         latitude=data.lat,
         longitude=data.lng,
         timestamp=datetime.utcnow(),
@@ -165,42 +181,37 @@ def update_location(
     caregiver.longitude = data.lng
 
     db.add(location)
+
+    status_changed = False
+    if booking.status == "assigned":
+        for next_status in resolve_status_path(booking.status, "on_the_way"):
+            validate_status_transition(booking.status, next_status)
+            booking.status = next_status
+            status_changed = True
+
     db.commit()
 
-    active_bookings_query = db.query(Booking).filter(Booking.caregiver_id == caregiver.id)
-    if data.booking_id:
-        active_bookings_query = active_bookings_query.filter(
-            Booking.id == data.booking_id,
-            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-        )
-    else:
-        active_bookings_query = active_bookings_query.filter(
-            Booking.status.in_(ACTIVE_BOOKING_STATUSES)
-        )
-
-    active_bookings = active_bookings_query.all()
-
-    for booking in active_bookings:
-        if booking.status == "assigned":
-            for next_status in resolve_status_path(booking.status, "on_the_way"):
-                validate_status_transition(booking.status, next_status)
-                booking.status = next_status
-
-    if active_bookings:
-        db.commit()
-
-    for booking in active_bookings:
+    broadcast_booking_update(
+        booking.id,
+        {
+            "type": "location_update",
+            "booking_id": booking.id,
+            "caregiver_id": caregiver.id,
+            "lat": data.lat,
+            "lng": data.lng,
+        },
+    )
+    if status_changed:
         broadcast_booking_update(
             booking.id,
             {
+                "type": "status_update",
                 "booking_id": booking.id,
                 "status": booking.status,
-                "lat": data.lat,
-                "lng": data.lng,
             },
         )
 
-    return {"status": "location updated", "booking_count": len(active_bookings)}
+    return {"status": "location updated", "booking_id": booking.id}
 
 
 @router.post("/update-status")
@@ -243,7 +254,7 @@ def update_status(
 
     latest_location = (
         db.query(Location)
-        .filter(Location.caregiver_id == booking.caregiver_id)
+        .filter(Location.booking_id == booking.id)
         .order_by(Location.timestamp.desc())
         .first()
     )

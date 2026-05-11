@@ -218,7 +218,7 @@ export default function LiveTrackingMap({ userLocation, caregiverLocation, statu
         ) : null}
 
         {caregiverLocation && caregiverPosition ? (
-          <SmoothMarker location={caregiverLocation} icon={caregiverIcon}>
+          <SmoothMarker key={`${caregiverLocation.lat}:${caregiverLocation.lng}`} location={caregiverLocation} icon={caregiverIcon}>
             <Popup>Caregiver</Popup>
           </SmoothMarker>
         ) : null}
@@ -240,7 +240,7 @@ export default function LiveTrackingMap({ userLocation, caregiverLocation, statu
 
       {!caregiverLocation ? (
         <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-amber-200 bg-amber-50/95 px-4 py-3 text-sm font-semibold text-amber-800 shadow-[0_12px_30px_rgba(15,23,42,0.12)] backdrop-blur">
-          Waiting for caregiver live location...
+          Waiting for caregiver live location
         </div>
       ) : null}
 

@@ -79,15 +79,18 @@ def serialize_public_caregiver(caregiver: Caregiver | None, caregiver_user: User
         "documents": documents,
     }
 
-def build_tracking_payload(db: Session, booking: Booking):
-    caregiver = db.query(Caregiver).filter(Caregiver.id == booking.caregiver_id).first()
-    latest_location = (
+
+def get_latest_booking_location(db: Session, booking_id: int):
+    return (
         db.query(Location)
-        .filter(Location.caregiver_id == booking.caregiver_id)
+        .filter(Location.booking_id == booking_id)
         .order_by(Location.timestamp.desc())
         .first()
     )
 
+
+def build_tracking_payload(db: Session, booking: Booking):
+    latest_location = get_latest_booking_location(db, booking.id)
     payload = {
         "booking_id": booking.id,
         "status": booking.status,
@@ -96,10 +99,6 @@ def build_tracking_payload(db: Session, booking: Booking):
     if latest_location:
         payload["lat"] = latest_location.latitude
         payload["lng"] = latest_location.longitude
-    elif caregiver and caregiver.latitude is not None and caregiver.longitude is not None:
-        payload["lat"] = caregiver.latitude
-        payload["lng"] = caregiver.longitude
-
     return payload
 
 
@@ -122,14 +121,7 @@ def get_tracking_details(
 
     caregiver = db.query(Caregiver).filter(Caregiver.id == booking.caregiver_id).first() if booking.caregiver_id else None
     caregiver_user = db.query(User).filter(User.id == caregiver.user_id).first() if caregiver else None
-    latest_location = (
-        db.query(Location)
-        .filter(Location.caregiver_id == booking.caregiver_id)
-        .order_by(Location.timestamp.desc())
-        .first()
-        if booking.caregiver_id
-        else None
-    )
+    latest_location = get_latest_booking_location(db, booking.id)
     review = db.query(Review).filter(Review.booking_id == booking.id).first()
     tasks = db.query(Task).filter(Task.booking_id == booking.id).order_by(Task.id.asc()).all()
 
@@ -197,6 +189,37 @@ def get_tracking_details(
         ),
     }
 
+
+@router.get("/latest-location/{booking_id}")
+def get_latest_location(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    payload: dict = Depends(get_current_user_payload),
+):
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if payload.get("role") == "user" and booking.user_id != payload["user_id"]:
+        raise HTTPException(status_code=403, detail="Tracking access denied")
+    if payload.get("role") == "caregiver":
+        caregiver = db.query(Caregiver).filter(Caregiver.user_id == payload["user_id"]).first()
+        if not caregiver or booking.caregiver_id != caregiver.id:
+            raise HTTPException(status_code=403, detail="Tracking access denied")
+    if payload.get("role") not in {"user", "caregiver", "admin"}:
+        raise HTTPException(status_code=403, detail="Tracking access denied")
+
+    latest_location = get_latest_booking_location(db, booking.id)
+    if not latest_location:
+        raise HTTPException(status_code=404, detail="No live caregiver location yet")
+
+    return {
+        "lat": latest_location.latitude,
+        "lng": latest_location.longitude,
+        "timestamp": latest_location.timestamp.isoformat() if latest_location.timestamp else None,
+    }
+
+
 @router.get("/eta")
 def get_eta(booking_id: int, db: Session = Depends(get_db)):
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
@@ -212,19 +235,10 @@ def get_eta(booking_id: int, db: Session = Depends(get_db)):
     if booking.status == "completed":
         return {"eta": "Completed"}
 
-    latest_location = (
-        db.query(Location)
-        .filter(Location.caregiver_id == booking.caregiver_id)
-        .order_by(Location.timestamp.desc())
-        .first()
-    )
+    latest_location = get_latest_booking_location(db, booking.id)
 
     if latest_location:
         return {"eta": "5 mins"}
-
-    caregiver = db.query(Caregiver).filter(Caregiver.id == booking.caregiver_id).first()
-    if caregiver and caregiver.latitude is not None and caregiver.longitude is not None:
-        return {"eta": "12 mins"}
 
     return {"eta": "15 mins"}
 

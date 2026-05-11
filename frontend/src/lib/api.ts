@@ -546,6 +546,10 @@ export const bookingAPI = {
 
 export const trackingAPI = {
   getETA: (bookingId: string) => api.get(`/tracking/eta?booking_id=${bookingId}`, { headers: withBearer(getUserToken()) }),
+  getLatestLocation: (bookingId: string | number) =>
+    api.get<{ lat: number; lng: number; timestamp?: string | null }>(`/tracking/latest-location/${bookingId}`, {
+      headers: withBearer(getUserToken()),
+    }),
   getDetails: (bookingId: string) =>
     api.get<{
         booking: {

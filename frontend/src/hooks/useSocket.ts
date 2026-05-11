@@ -43,6 +43,7 @@ export function useSocket(bookingId: string | null) {
           if (data.type === "pong") {
             return;
           }
+          console.log("WebSocket location update:", data);
           const hasLocation =
             (data.type === "location_update" || data.type === undefined || data.type === "status") &&
             typeof data.lat === "number" &&

@@ -155,12 +155,21 @@ export default function CaregiverDashboardPage() {
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         try {
-          await caregiverAPI.updateProfileLocation({
-            caregiver_id: profile.id,
-            address: profile.address || profile.location || "Current location",
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
+          if (currentBooking?.id) {
+            await caregiverAPI.updateLocation({
+              caregiver_id: profile.id,
+              booking_id: currentBooking.id,
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+          } else {
+            await caregiverAPI.updateProfileLocation({
+              caregiver_id: profile.id,
+              address: profile.address || profile.location || "Current location",
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            });
+          }
           await loadDashboard(true);
         } catch (err: any) {
           setError(err.response?.data?.detail || "Unable to update current location.");

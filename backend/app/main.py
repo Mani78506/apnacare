@@ -302,6 +302,28 @@ def ensure_caregiver_columns() -> None:
 ensure_caregiver_columns()
 
 
+def ensure_location_columns() -> None:
+    inspector = inspect(engine)
+    if "locations" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("locations")}
+    statements: list[str] = []
+
+    if "booking_id" not in existing_columns:
+        statements.append("ALTER TABLE locations ADD COLUMN booking_id INTEGER")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+ensure_location_columns()
+
+
 def ensure_notification_columns() -> None:
     inspector = inspect(engine)
     if "notifications" not in inspector.get_table_names():

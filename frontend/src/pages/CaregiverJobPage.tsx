@@ -105,7 +105,7 @@ export default function CaregiverJobPage() {
   const bookingId = id ? Number(id) : null;
   const activeBookingId = booking?.id ?? bookingId;
   const sharingEnabled = Boolean(
-    bookingId &&
+    activeBookingId &&
     caregiverId &&
     booking &&
     ["accepted", "on_the_way", "arrived", "started"].includes(booking.status)
@@ -113,7 +113,7 @@ export default function CaregiverJobPage() {
 
   const { permissionError, isSharing } = useLiveLocation({
     caregiverId,
-    bookingId,
+    bookingId: activeBookingId,
     enabled: sharingEnabled,
   });
   const otpVerified = Boolean(booking?.otp_verified);
@@ -353,6 +353,42 @@ export default function CaregiverJobPage() {
     }
   };
 
+  const updateCurrentLocation = async () => {
+    if (!caregiverId || !activeBookingId) {
+      setError("Active booking is required to update live location.");
+      return;
+    }
+    if (!navigator.geolocation) {
+      setError("Location permission denied. Please enable GPS/location access.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        try {
+          await caregiverAPI.updateLocation({
+            caregiver_id: caregiverId,
+            booking_id: activeBookingId,
+            lat: coords.lat,
+            lng: coords.lng,
+          });
+          setLiveLocation(coords);
+          toast.success("Live location updated");
+        } catch (err: any) {
+          setError(err.response?.data?.detail || "Unable to update live location.");
+        }
+      },
+      () => {
+        setError("Location permission denied. Please enable GPS/location access.");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+    );
+  };
+
   const verifyOtp = async () => {
     if (!bookingId || !enteredOtp.trim()) {
       toast.error("Enter the patient OTP first.");
@@ -572,6 +608,13 @@ export default function CaregiverJobPage() {
                       <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-300">
                         Coordinates are pushed to ApnaCare whenever your GPS position changes while this page is open.
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => void updateCurrentLocation()}
+                        className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
+                      >
+                        Update Current Location
+                      </button>
                     </div>
                   </div>
                 </section>

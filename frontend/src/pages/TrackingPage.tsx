@@ -129,9 +129,7 @@ export default function TrackingPage() {
         } else {
           setUserLocation(null);
         }
-        if (res.data.latest_location?.lat != null && res.data.latest_location?.lng != null) {
-          setCaregiverLocation({ lat: res.data.latest_location.lat, lng: res.data.latest_location.lng });
-        } else if (!res.data.booking.caregiver || res.data.booking.status === "pending" || res.data.booking.status === "cancelled") {
+        if (!res.data.booking.caregiver || res.data.booking.status === "pending" || res.data.booking.status === "cancelled") {
           setCaregiverLocation(null);
         }
         setAssignedCaregiver(res.data.booking.caregiver ?? null);
@@ -177,10 +175,22 @@ export default function TrackingPage() {
         setETA(res.data.eta);
       } catch {}
     };
+    const fetchLatestLocation = async () => {
+      try {
+        const res = await trackingAPI.getLatestLocation(bookingId);
+        if (res.data.lat != null && res.data.lng != null) {
+          setCaregiverLocation({ lat: res.data.lat, lng: res.data.lng });
+        }
+      } catch {
+        setCaregiverLocation(null);
+      }
+    };
     void fetchTrackingDetails();
+    void fetchLatestLocation();
     void fetchETA();
     const interval = setInterval(() => {
       void fetchTrackingDetails();
+      void fetchLatestLocation();
       void fetchETA();
     }, 5000);
     return () => clearInterval(interval);
@@ -188,7 +198,12 @@ export default function TrackingPage() {
 
   useEffect(() => {
     if (caregiverLocation) setLastLocationUpdate(new Date());
+    console.log("Caregiver live location:", caregiverLocation);
   }, [caregiverLocation]);
+
+  useEffect(() => {
+    console.log("User location:", userLocation);
+  }, [userLocation]);
 
   useEffect(() => {
     if (bookingStatus) setStatus(bookingStatus);
@@ -322,10 +337,13 @@ export default function TrackingPage() {
               <div className="mb-4 grid gap-3 md:grid-cols-4">
                 <MapStatusCard label="Current Status" value={(status || "assigned").replaceAll("_", " ")} tone="neutral" />
                 <MapStatusCard label="Distance" value={distanceKm ? `${distanceKm.toFixed(distanceKm > 10 ? 1 : 2)} km` : "Waiting for both locations"} tone={distanceKm ? "good" : "neutral"} />
-                <MapStatusCard label="Caregiver Location" value={caregiverLocation ? `${formatCoordinate(caregiverLocation.lat)}, ${formatCoordinate(caregiverLocation.lng)}` : "Waiting for caregiver live location..."} tone={caregiverLocation ? "good" : "warn"} />
+                <MapStatusCard label="Caregiver Location" value={caregiverLocation ? `${formatCoordinate(caregiverLocation.lat)}, ${formatCoordinate(caregiverLocation.lng)}` : "Waiting for caregiver live location"} tone={caregiverLocation ? "good" : "warn"} />
                 <MapStatusCard label="Patient Location" value={userLocation ? `${formatCoordinate(userLocation.lat)}, ${formatCoordinate(userLocation.lng)}` : "Patient location not available"} tone={userLocation ? "good" : "warn"} />
               </div>
               <TrackingMapPanel caregiverLocation={caregiverLocation} userLocation={userLocation} status={status} />
+              <div className={`mt-4 rounded-[18px] border px-4 py-3 text-sm font-semibold ${caregiverLocation ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+                {caregiverLocation ? "Caregiver live location updated" : "Waiting for caregiver live location"}
+              </div>
             </section>
 
             <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_20px_70px_rgba(15,23,42,0.06)]">
