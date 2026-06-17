@@ -1,5 +1,6 @@
 import os
 import base64
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from fastapi import FastAPI
@@ -7,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import Base, SessionLocal, engine
 from app.models import booking as booking_model  # noqa: F401
 from app.models import caregiver as caregiver_model  # noqa: F401
@@ -24,9 +26,6 @@ from app.models.user import User
 from app.routes import admin, auth, booking, caregiver, location_lookup, onboarding, profile, tracking
 from app.routes import task, payment
 from app.services.pricing_service import calculate_amount
-
-
-Base.metadata.create_all(bind=engine)
 
 
 def ensure_booking_columns() -> None:
@@ -126,9 +125,6 @@ def ensure_booking_columns() -> None:
             connection.execute(text(statement))
 
 
-ensure_booking_columns()
-
-
 def ensure_user_columns() -> None:
     inspector = inspect(engine)
     if "users" not in inspector.get_table_names():
@@ -154,9 +150,6 @@ def ensure_user_columns() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
-
-
-ensure_user_columns()
 
 
 def backfill_booking_rows() -> None:
@@ -249,9 +242,6 @@ def backfill_booking_rows() -> None:
         db.close()
 
 
-backfill_booking_rows()
-
-
 def ensure_caregiver_columns() -> None:
     inspector = inspect(engine)
     if "caregivers" not in inspector.get_table_names():
@@ -299,9 +289,6 @@ def ensure_caregiver_columns() -> None:
             connection.execute(text(statement))
 
 
-ensure_caregiver_columns()
-
-
 def ensure_location_columns() -> None:
     inspector = inspect(engine)
     if "locations" not in inspector.get_table_names():
@@ -319,9 +306,6 @@ def ensure_location_columns() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
-
-
-ensure_location_columns()
 
 
 def ensure_notification_columns() -> None:
@@ -351,9 +335,6 @@ def ensure_notification_columns() -> None:
             connection.execute(text(statement))
 
 
-ensure_notification_columns()
-
-
 def ensure_task_columns() -> None:
     inspector = inspect(engine)
     if "tasks" not in inspector.get_table_names():
@@ -371,9 +352,6 @@ def ensure_task_columns() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
-
-
-ensure_task_columns()
 
 
 def migrate_legacy_caregiver_documents() -> None:
@@ -423,9 +401,30 @@ def migrate_legacy_caregiver_documents() -> None:
         session.close()
 
 
-migrate_legacy_caregiver_documents()
+def initialize_database() -> None:
+    Base.metadata.create_all(bind=engine)
+    ensure_booking_columns()
+    ensure_user_columns()
+    backfill_booking_rows()
+    ensure_caregiver_columns()
+    ensure_location_columns()
+    ensure_notification_columns()
+    ensure_task_columns()
+    migrate_legacy_caregiver_documents()
 
-app = FastAPI(title="ApnaCare API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        initialize_database()
+    except SQLAlchemyError as exc:
+        raise RuntimeError(
+            "Database initialization failed. Check DATABASE_URL, Supabase project ref, user, password, and pooler host."
+        ) from exc
+    yield
+
+
+app = FastAPI(title="ApnaCare API", lifespan=lifespan)
 os.makedirs("qr_codes", exist_ok=True)
 
 frontend_origins = os.getenv(
