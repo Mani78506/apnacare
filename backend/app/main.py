@@ -1,9 +1,11 @@
 import os
 import base64
+import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -26,6 +28,10 @@ from app.models.user import User
 from app.routes import admin, auth, booking, caregiver, location_lookup, onboarding, profile, tracking
 from app.routes import task, payment
 from app.services.pricing_service import calculate_amount
+
+
+logger = logging.getLogger(__name__)
+database_startup_error: str | None = None
 
 
 def ensure_booking_columns() -> None:
@@ -415,12 +421,15 @@ def initialize_database() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global database_startup_error
     try:
         initialize_database()
+        database_startup_error = None
     except SQLAlchemyError as exc:
-        raise RuntimeError(
+        database_startup_error = str(exc)
+        logger.exception(
             "Database initialization failed. Check DATABASE_URL, Supabase project ref, user, password, and pooler host."
-        ) from exc
+        )
     yield
 
 
@@ -458,7 +467,28 @@ app.include_router(profile.router, prefix="/profile", tags=["Profile"])
 
 @app.get("/")
 def root():
-    return {"message": "ApnaCare API Running"}
+    return {
+        "message": "ApnaCare API Running",
+        "database": "connected" if database_startup_error is None else "unavailable",
+    }
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
+@app.get("/health/db")
+def database_health():
+    if database_startup_error:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "detail": "Database initialization failed. Check DATABASE_URL in Render.",
+            },
+        )
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
